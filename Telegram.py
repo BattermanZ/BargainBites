@@ -134,7 +134,7 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
         tooGoodToGo.users_settings_data[group_chat_id][call.data] = 0 if settings else 1
         await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id,
                                             reply_markup=inline_keyboard_markup())
-        tooGoodToGo.save_users_settings_data_to_txt()
+        tooGoodToGo.db.save_users_settings_data(tooGoodToGo.users_settings_data)
 
     @bot.callback_query_handler(func=lambda c: c.data == 'activate_all')
     async def activate_all(call: types.CallbackQuery):
@@ -143,7 +143,7 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
         logger.info(f"Activating all settings in group {group_chat_id}")
         for key in tooGoodToGo.users_settings_data[group_chat_id].keys():
             tooGoodToGo.users_settings_data[group_chat_id][key] = 1
-        tooGoodToGo.save_users_settings_data_to_txt()
+        tooGoodToGo.db.save_users_settings_data(tooGoodToGo.users_settings_data)
         await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id,
                                             reply_markup=inline_keyboard_markup())
 
@@ -154,8 +154,15 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
         logger.info(f"Disabling all settings in group {group_chat_id}")
         for key in tooGoodToGo.users_settings_data[group_chat_id].keys():
             tooGoodToGo.users_settings_data[group_chat_id][key] = 0
-        tooGoodToGo.save_users_settings_data_to_txt()
+        tooGoodToGo.db.save_users_settings_data(tooGoodToGo.users_settings_data)
         await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id,
                                             reply_markup=inline_keyboard_markup())
 
+    async def shutdown():
+        logger.info("Shutting down Telegram bot...")
+        # AsyncTeleBot doesn't have a stop_polling method, so we'll just log the shutdown
+        logger.info("Telegram bot shutdown complete.")
+
+    bot.shutdown = shutdown
     return bot
+

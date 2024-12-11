@@ -1,11 +1,11 @@
 import json
 import time
 from datetime import datetime, timezone, date, timedelta
-from threading import Thread
-
+from threading import Thread, Event
 from telebot import TeleBot, types
 from tgtg import TgtgClient
 from database import Database
+import asyncio
 
 class TooGoodToGo:
     def __init__(self, bot_token, logger):
@@ -17,7 +17,9 @@ class TooGoodToGo:
         self.available_items_favorites = self.db.get_available_items_favorites()
         self.connected_clients = {}
         self.client = TgtgClient
-        Thread(target=self.get_available_items_per_user).start()
+        self.shutdown_flag = Event()
+        self.thread = Thread(target=self.get_available_items_per_user)
+        self.thread.start()
         self.bot.set_my_commands([
             types.BotCommand("/info", "favorite bags that are currently available"),
             types.BotCommand("/login", "log in with your mail"),
@@ -98,14 +100,12 @@ class TooGoodToGo:
         
             pickup_time = f"⏰ {day_str} {start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')} ({start_time.strftime('%A')})"
 
-        status_emoji = {
-            'new_stock': '🆕 *New Stock*',
-            'sold_out': '❗️ *Sold Out*',
-            'stock_increased': '📈 *Stock Increased*',
-            'stock_reduced': '📉 *Stock Reduced*'
+        status_headers = {
+            'new_stock': '*NEW BAGS AVAILABLE* 🛍️\n\n',
+            'sold_out': '*SOLD-OUT* 🥺\n\n'
         }
 
-        message = f"{status_emoji.get(status, '')}\n\n" if status else ""
+        message = status_headers.get(status, '')
         message += f"🏪 *{store_name}*\n"
         message += f"📍 {address}\n"
         message += f"💰 €{price:.2f}\n"
@@ -135,14 +135,18 @@ class TooGoodToGo:
             self.send_message(user_id, "❌ An error occurred while fetching available items. Please try again later.")
 
     def get_available_items_per_user(self):
-        while True:
+        while not self.shutdown_flag.is_set():
             try:
                 temp_available_items = {}
-                for key in self.users_login_data.keys():
+                for key in list(self.users_login_data.keys()):
+                    if self.shutdown_flag.is_set():
+                        break
                     self.connect(key)
                     time.sleep(1)
                     available_items = self.get_favourite_items()
                     for item in available_items:
+                        if self.shutdown_flag.is_set():
+                            break
                         status = None
                         item_id = item['item']['item_id']
                         if item_id in self.available_items_favorites and item_id not in temp_available_items:
@@ -164,8 +168,26 @@ class TooGoodToGo:
                             message, item_id = self.format_message(item, temp_available_items[item_id])
                             self.logger.info(f"{temp_available_items[item_id]} Telegram USER_ID: {key}\n{message}")
                             self.send_message_with_link(key, message, item_id)
-                self.db.save_available_items_favorites(self.available_items_favorites)
-                time.sleep(60)
+                if not self.shutdown_flag.is_set():
+                    self.db.save_available_items_favorites(self.available_items_favorites)
+                    self.shutdown_flag.wait(timeout=60)
             except Exception as err:
                 self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
+                if not self.shutdown_flag.is_set():
+                    time.sleep(60)
+        
+        self.logger.info("Background thread has finished.")
+
+    async def shutdown(self):
+        self.logger.info("Shutting down TooGoodToGo handler...")
+        self.shutdown_flag.set()
+        self.thread.join(timeout=10)  # Increased timeout to 10 seconds
+        if self.thread.is_alive():
+            self.logger.warning("Background thread did not terminate within the timeout period.")
+        # Remove the await keyword as TeleBot.stop_bot() is not a coroutine
+        self.bot.stop_bot()
+        self.db.close()
+        for client in self.connected_clients.values():
+            client.close()  # Close all TgtgClient instances
+        self.logger.info("TooGoodToGo handler shut down complete.")
 
