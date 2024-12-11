@@ -10,6 +10,7 @@ __pycache__/
 
 # Ignore environment variables
 .env
+config.ini
 
 # Ignore logs
 logs/
@@ -35,5 +36,7 @@ instance/
 .idea/
 .vscode/
 
-# ignore docker image
-*.tar
+# TGTG info
+available_items_favorites.txt
+users_login_data.txt
+users_settings_data.txt
