@@ -1,0 +1,39 @@
+# Ignore Python virtual environment
+venv/
+node_modules/
+dist/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore environment variables
+.env
+
+# Ignore logs
+logs/
+
+# Ignore database
+database/
+*.db
+instance/
+
+# Ignore database
+*.sqlite3
+
+# Ignore Docker image layers
+.Dockerfile.swp
+
+# Ignore local config files
+.DS_Store
+
+# Ignore Pytest cache
+.pytest_cache/
+
+# Ignore other unwanted files
+.idea/
+.vscode/
+
+# ignore docker image
+*.tar
