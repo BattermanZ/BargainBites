@@ -35,8 +35,3 @@ instance/
 # Ignore other unwanted files
 .idea/
 .vscode/
-
-# TGTG info
-available_items_favorites.txt
-users_login_data.txt
-users_settings_data.txt

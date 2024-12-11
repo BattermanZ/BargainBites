@@ -17,6 +17,10 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
+# Create database directory if it doesn't exist
+os.makedirs('database', exist_ok=True)
+
+
 # Read configuration
 config = configparser.ConfigParser()
 config.read('config.ini')
@@ -33,6 +37,7 @@ async def main():
     logger.info("Starting BargainBites bot...")
     print("BargainBites bot is starting...")
     print(f"Bot is configured for group chat ID: {group_chat_id}")
+    print("Database will be stored in the 'database' folder")
     print("Bot is now running. Press Ctrl+C to stop.")
     
     await bot.polling(non_stop=True, timeout=60)

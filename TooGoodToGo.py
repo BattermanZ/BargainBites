@@ -1,23 +1,22 @@
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 from threading import Thread
 
 from telebot import TeleBot, types
 from tgtg import TgtgClient
+from database import Database
 
 class TooGoodToGo:
     def __init__(self, bot_token, logger):
         self.bot = TeleBot(bot_token)
         self.logger = logger
-        self.users_login_data = {}
-        self.users_settings_data = {}
-        self.available_items_favorites = {}
+        self.db = Database('database/bargain_bites.db')
+        self.users_login_data = self.db.get_users_login_data()
+        self.users_settings_data = self.db.get_users_settings_data()
+        self.available_items_favorites = self.db.get_available_items_favorites()
         self.connected_clients = {}
         self.client = TgtgClient
-        self.read_users_login_data_from_txt()
-        self.read_users_settings_data_from_txt()
-        self.read_available_items_favorites_from_txt()
         Thread(target=self.get_available_items_per_user).start()
         self.bot.set_my_commands([
             types.BotCommand("/info", "favorite bags that are currently available"),
@@ -27,71 +26,22 @@ class TooGoodToGo:
         ])
 
     def send_message(self, telegram_user_id, message):
-        self.bot.send_message(telegram_user_id, text=message)
+        self.bot.send_message(telegram_user_id, text=message, parse_mode="Markdown")
 
     def send_message_with_link(self, telegram_user_id, message, item_id):
-        self.bot.send_message(telegram_user_id, text=message, reply_markup=types.InlineKeyboardMarkup(
-            keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text="Open in app 📱",
-                        callback_data="open_app",
-                        url="https://share.toogoodtogo.com/item/" + item_id
-                    )
-                ],
-            ]
-        ))
-
-    def read_users_login_data_from_txt(self):
-        try:
-            with open('users_login_data.txt', 'r') as file:
-                data = file.read()
-                self.users_login_data = json.loads(data)
-        except FileNotFoundError:
-            self.logger.warning("users_login_data.txt not found. Creating a new one.")
-            self.users_login_data = {}
-            self.save_users_login_data_to_txt()
-
-    def save_users_login_data_to_txt(self):
-        with open('users_login_data.txt', 'w') as file:
-            json.dump(self.users_login_data, file)
-
-    def read_users_settings_data_from_txt(self):
-        try:
-            with open('users_settings_data.txt', 'r') as file:
-                data = file.read()
-                self.users_settings_data = json.loads(data)
-        except FileNotFoundError:
-            self.logger.warning("users_settings_data.txt not found. Creating a new one.")
-            self.users_settings_data = {}
-            self.save_users_settings_data_to_txt()
-
-    def save_users_settings_data_to_txt(self):
-        with open('users_settings_data.txt', 'w') as file:
-            json.dump(self.users_settings_data, file)
-
-    def read_available_items_favorites_from_txt(self):
-        try:
-            with open('available_items_favorites.txt', 'r') as file:
-                data = file.read()
-                self.available_items_favorites = json.loads(data)
-        except FileNotFoundError:
-            self.logger.warning("available_items_favorites.txt not found. Creating a new one.")
-            self.available_items_favorites = {}
-            self.save_available_items_favorites_to_txt()
-
-    def save_available_items_favorites_to_txt(self):
-        with open('available_items_favorites.txt', 'w') as file:
-            json.dump(self.available_items_favorites, file)
+        keyboard = types.InlineKeyboardMarkup()
+        url_button = types.InlineKeyboardButton(text="Open in App", url=f"https://share.toogoodtogo.com/item/{item_id}")
+        keyboard.add(url_button)
+        self.bot.send_message(telegram_user_id, text=message, reply_markup=keyboard, parse_mode="Markdown")
 
     def add_user(self, telegram_user_id, credentials):
         self.users_login_data[telegram_user_id] = credentials
-        self.save_users_login_data_to_txt()
+        self.db.save_users_login_data(self.users_login_data)
         self.users_settings_data[telegram_user_id] = {'sold_out': 0,
-                                                'new_stock': 1,
+                                                      'new_stock': 1,
                                                       'stock_reduced': 0,
                                                       'stock_increased': 0}
-        self.save_users_settings_data_to_txt()
+        self.db.save_users_settings_data(self.users_settings_data)
 
     def new_user(self, telegram_user_id, email):
         try:
@@ -124,27 +74,61 @@ class TooGoodToGo:
     def get_favourite_items(self):
         return self.client.get_items()
 
+    def format_message(self, item, status=None):
+        store_name = item['store']['store_name']
+        address = item['store']['store_location']['address']['address_line']
+        price = item['item']["price_including_taxes"]["minor_units"] / 100
+        items_available = item['items_available']
+        item_id = item['item']['item_id']
+
+        pickup_time = ""
+        if 'pickup_interval' in item:
+            start_time = datetime.strptime(item['pickup_interval']['start'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
+            end_time = datetime.strptime(item['pickup_interval']['end'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).astimezone()
+        
+            today = date.today()
+            tomorrow = today + timedelta(days=1)
+        
+            if start_time.date() == today:
+                day_str = "Today"
+            elif start_time.date() == tomorrow:
+                day_str = "Tomorrow"
+            else:
+                day_str = start_time.strftime("%A")
+        
+            pickup_time = f"⏰ {day_str} {start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')} ({start_time.strftime('%A')})"
+
+        status_emoji = {
+            'new_stock': '🆕 *New Stock*',
+            'sold_out': '❗️ *Sold Out*',
+            'stock_increased': '📈 *Stock Increased*',
+            'stock_reduced': '📉 *Stock Reduced*'
+        }
+
+        message = f"{status_emoji.get(status, '')}\n\n" if status else ""
+        message += f"🏪 *{store_name}*\n"
+        message += f"📍 {address}\n"
+        message += f"💰 €{price:.2f}\n"
+        message += f"🥡 {items_available} bags available\n"
+        if pickup_time:
+            message += f"{pickup_time}\n"
+        
+        return message, item_id
+
     def send_available_favourite_items_for_one_user(self, user_id):
         try:
             self.connect(user_id)
             favourite_items = self.get_favourite_items()
-            available_items = []
-            for item in favourite_items:
-                if item['items_available'] > 0:
-                    item_id = item['item']['item_id']
-                    store_name = "🍽 " + str(item['store']['store_name'])
-                    store_address_line = "🧭 " + str(item['store']['store_location']['address']['address_line'])
-                    store_price = "💰 " + str(int(item['item']["price_including_taxes"]["minor_units"]) / 100)
-                    store_items_available = "🥡 " + str(item['items_available'])
-                    text = "{0}\n{1}\n{2}\n{3}\n⏰ {4} - {5}".format(
-                        store_name, store_address_line, store_price, store_items_available,
-                        datetime.strptime(item['pickup_interval']['start'], "%Y-%m-%dT%H:%M:%SZ").astimezone(timezone.utc).strftime("%a %d.%m at %H:%M"),
-                        datetime.strptime(item['pickup_interval']['end'], '%Y-%m-%dT%H:%M:%SZ').astimezone(timezone.utc).strftime("%a %d.%m at %H:%M")
-                    )
-                    self.send_message_with_link(user_id, text, item_id)
-                    available_items.append(item)
-            if len(available_items) == 0:
+            available_items = [item for item in favourite_items if item['items_available'] > 0]
+            
+            if not available_items:
                 self.send_message(user_id, "Currently all your favorites are sold out 😕")
+                return
+
+            for item in available_items:
+                message, item_id = self.format_message(item)
+                self.send_message_with_link(user_id, message, item_id)
+            
             self.logger.info(f"Sent available items for user ID: {user_id}")
         except Exception as e:
             self.logger.error(f"Error sending available items: {e}")
@@ -159,7 +143,7 @@ class TooGoodToGo:
                     time.sleep(1)
                     available_items = self.get_favourite_items()
                     for item in available_items:
-                        status = "null"
+                        status = None
                         item_id = item['item']['item_id']
                         if item_id in self.available_items_favorites and item_id not in temp_available_items:
                             old_items_available = int(self.available_items_favorites[item_id]['items_available'])
@@ -172,28 +156,16 @@ class TooGoodToGo:
                                 status = "stock_reduced"
                             elif old_items_available < new_items_available:
                                 status = "stock_increased"
-                            if status != "null":
+                            if status:
                                 temp_available_items[item_id] = status
                         self.available_items_favorites[item_id] = item
                         if item_id in temp_available_items and \
                                 self.users_settings_data[key][temp_available_items[item_id]] == 1:
-                            saved_status = temp_available_items[item_id]
-                            store_name = "🍽 " + str(item['store']['store_name'])
-                            store_address_line = "🧭 " + str(item['store']['store_location']['address']['address_line'])
-                            store_price = "💰 " + str(int(item['item']["price_including_taxes"]["minor_units"]) / 100)
-                            store_items_available = "🥡 " + str(item['items_available'])
-                            if saved_status == "sold_out":
-                                text = f"{store_name}\n{store_address_line}\n{store_price}\n{store_items_available}"
-                            else:
-                                text = "{0}\n{1}\n{2}\n{3}\n⏰ {4} - {5}".format(
-                                    store_name, store_address_line, store_price, store_items_available,
-                                    datetime.strptime(item['pickup_interval']['start'], "%Y-%m-%dT%H:%M:%SZ").astimezone(timezone.utc).strftime("%a %d.%m at %H:%M"),
-                                    datetime.strptime(item['pickup_interval']['end'], '%Y-%m-%dT%H:%M:%SZ').astimezone(timezone.utc).strftime("%a %d.%m at %H:%M")
-                                )
-                            text += f"\n{saved_status}"
-                            self.logger.info(f"{saved_status} Telegram USER_ID: {key}\n{text}")
-                            self.send_message_with_link(key, text, item_id)
-                self.save_available_items_favorites_to_txt()
+                            message, item_id = self.format_message(item, temp_available_items[item_id])
+                            self.logger.info(f"{temp_available_items[item_id]} Telegram USER_ID: {key}\n{message}")
+                            self.send_message_with_link(key, message, item_id)
+                self.db.save_available_items_favorites(self.available_items_favorites)
                 time.sleep(60)
             except Exception as err:
                 self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
+
