@@ -171,6 +171,13 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
         logger.info(f"Received /blacklist command in group {group_chat_id}")
         await tooGoodToGo.get_blacklist(group_chat_id)
 
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('remove_blacklist_'))
+    async def callback_remove_blacklist(call):
+        if str(call.message.chat.id) != group_chat_id:
+            return
+        logger.info(f"Received remove_blacklist callback in group {group_chat_id}")
+        await tooGoodToGo.handle_remove_blacklist_callback(call)
+
     @bot.message_handler(commands=['remove_blacklist'])
     async def remove_from_blacklist(message):
         if str(message.chat.id) != group_chat_id:

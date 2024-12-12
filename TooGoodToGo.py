@@ -7,7 +7,6 @@ from telebot import types
 from tgtg import TgtgClient
 from database import Database
 import asyncio
-from queue import Queue, Empty
 
 class TooGoodToGo:
     def __init__(self, bot_token, logger):
@@ -24,7 +23,6 @@ class TooGoodToGo:
         self.thread.start()
         self.message_queue = asyncio.Queue()
         asyncio.create_task(self.process_message_queue())
-        asyncio.create_task(self.log_queue_size())
         asyncio.create_task(self.set_bot_commands())
 
     async def set_bot_commands(self):
@@ -49,10 +47,7 @@ class TooGoodToGo:
     def add_user(self, telegram_user_id, credentials):
         self.users_login_data[telegram_user_id] = credentials
         self.db.save_users_login_data(self.users_login_data)
-        self.users_settings_data[telegram_user_id] = {'sold_out': 0,
-                                                      'new_stock': 1,
-                                                      'stock_reduced': 0,
-                                                      'stock_increased': 0}
+        self.users_settings_data[telegram_user_id] = {'sold_out': 0, 'new_stock': 1, 'stock_reduced': 0, 'stock_increased': 0}
         self.db.save_users_settings_data(self.users_settings_data)
 
     async def new_user(self, telegram_user_id, email):
@@ -98,17 +93,14 @@ class TooGoodToGo:
         if 'pickup_interval' in item:
             start_time = datetime.strptime(item['pickup_interval']['start'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
             end_time = datetime.strptime(item['pickup_interval']['end'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).astimezone()
-        
             today = date.today()
             tomorrow = today + timedelta(days=1)
-        
             if start_time.date() == today:
                 day_str = "Today"
             elif start_time.date() == tomorrow:
                 day_str = "Tomorrow"
             else:
                 day_str = start_time.strftime("%A")
-        
             pickup_time = f"⏰ {day_str} {start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')} ({start_time.strftime('%A')})"
 
         status_headers = {
@@ -205,37 +197,22 @@ class TooGoodToGo:
                 finally:
                     self.message_queue.task_done()
             except asyncio.TimeoutError:
-                # Queue is empty, just continue the loop
                 pass
             except Exception as e:
                 self.logger.error(f"Unexpected error in process_message_queue: {e}", exc_info=True)
                 await asyncio.sleep(1)
 
-    async def log_queue_size(self):
-        while True:
-            self.logger.info(f"Current message queue size: {self.message_queue.qsize()}")
-            await asyncio.sleep(60)
-
     async def graceful_shutdown(self):
        self.logger.info("Initiating graceful shutdown...")
        self.shutdown_flag.set()
-       
-       # Wait for the background thread to finish
        self.thread.join(timeout=10)
        if self.thread.is_alive():
            self.logger.warning("Background thread did not terminate within the timeout period.")
-       
-       # Wait for the message queue to be empty
        if not self.message_queue.empty():
            self.logger.info("Waiting for message queue to be processed...")
            await self.message_queue.join()
-       
-       # Close the bot
        await self.bot.close()
-       
-       # Close the database connection
        self.db.close()
-       
        self.logger.info("Graceful shutdown complete.")
 
     async def shutdown(self):
@@ -243,7 +220,10 @@ class TooGoodToGo:
 
     async def add_to_blacklist(self, user_id, store_id, store_name):
         self.db.add_blacklisted_store(user_id, store_id, store_name)
-        await self.send_message(user_id, f"Store '{store_name}' has been added to your blacklist.")
+        message = (f"Store '{store_name}' has been added to your blacklist.\n\n"
+                   f"To view and manage your blacklist, use the /blacklist command. "
+                   f"You can easily remove stores from your blacklist using the provided buttons.")
+        await self.send_message(user_id, message)
 
     async def remove_from_blacklist(self, user_id, store_id, store_name):
         self.db.remove_blacklisted_store(user_id, store_id)
@@ -254,9 +234,35 @@ class TooGoodToGo:
         if not blacklisted_stores:
             await self.send_message(user_id, "You haven't blacklisted any stores yet.")
         else:
-            message = "Your blacklisted stores:\n\n"
+            message = "Your blacklisted stores:\n\nClick on a button to remove a store from your blacklist:"
+            keyboard = types.InlineKeyboardMarkup(row_width=2)
+            buttons = []
             for store_id, store_name in blacklisted_stores:
-                message += f"• {store_name} (ID: {store_id})\n"
-            message += "\nTo remove a store from the blacklist, use /remove_blacklist <store_id>"
-            await self.send_message(user_id, message)
+                button = types.InlineKeyboardButton(text=store_name, callback_data=f"remove_blacklist_{store_id}")
+                buttons.append(button)
+            keyboard.add(*buttons)
+            await self.bot.send_message(user_id, message, reply_markup=keyboard)
+
+    async def handle_remove_blacklist_callback(self, call):
+        user_id = call.message.chat.id
+        store_id = call.data.split('_')[2]
+        blacklisted_stores = self.db.get_blacklisted_stores(user_id)
+        store_name = next((name for id, name in blacklisted_stores if id == store_id), None)
+    
+        if store_name:
+            await self.remove_from_blacklist(user_id, store_id, store_name)
+            await self.bot.answer_callback_query(call.id, text=f"'{store_name}' removed from blacklist.")
+            updated_blacklist = self.db.get_blacklisted_stores(user_id)
+            if not updated_blacklist:
+                await self.bot.edit_message_text("Your blacklist is now empty.", user_id, call.message.message_id)
+            else:
+                new_keyboard = types.InlineKeyboardMarkup(row_width=2)
+                buttons = []
+                for s_id, s_name in updated_blacklist:
+                    button = types.InlineKeyboardButton(text=s_name, callback_data=f"remove_blacklist_{s_id}")
+                    buttons.append(button)
+                new_keyboard.add(*buttons)
+                await self.bot.edit_message_reply_markup(user_id, call.message.message_id, reply_markup=new_keyboard)
+        else:
+            await self.bot.answer_callback_query(call.id, text="Store not found in blacklist.")
 
