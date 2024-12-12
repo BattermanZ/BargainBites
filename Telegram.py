@@ -27,6 +27,8 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
 
     ℹ️ With */info* you can display all stores from the favorites where bags are currently available.
 
+    🚫 Use */blacklist* to manage your ignored stores.
+
     _🌐 You can find more information about Too Good To Go_ [here](https://www.toogoodtogo.com/).
 
     *🌍 LET'S FIGHT food waste TOGETHER 🌎*
@@ -43,7 +45,7 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
                                    text="🔑 You have to log in with your mail first!\nPlease enter */login email@example.com*\n*❗️️This is necessary if you want to use the bot❗️*",
                                    parse_mode="Markdown")
             return None
-        tooGoodToGo.send_available_favourite_items_for_one_user(group_chat_id)
+        await tooGoodToGo.send_available_favourite_items_for_one_user(group_chat_id)
 
     @bot.message_handler(commands=['login'])
     async def send_login(message):
@@ -58,17 +60,11 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
         logger.info(f"Login attempt with email: {email}")
 
         if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=group_chat_id, text="📩 Please open your mail account"
-                                                         "\nYou will then receive an email with a confirmation link."
-                                                         "\n*You must open the link in your browser!*"
-                                                         "\n_You do not need to enter a password._", parse_mode="markdown")
-            tooGoodToGo.new_user(group_chat_id, email)
+            await bot.send_message(chat_id=group_chat_id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!*\n_You do not need to enter a password._", parse_mode="markdown")
+            await tooGoodToGo.new_user(group_chat_id, email)
         else:
             await bot.send_message(chat_id=group_chat_id,
-                                   text="*⚠️ No valid mail address ⚠️*"
-                                        "\nPlease enter */login email@example.com*"
-                                        "\n_You will then receive an email with a confirmation link."
-                                        "\nYou do not need to enter a password._",
+                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */login email@example.com*\n_You will then receive an email with a confirmation link.\nYou do not need to enter a password._",
                                    parse_mode="Markdown")
 
     def inline_keyboard_markup():
@@ -158,9 +154,43 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
         await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id,
                                             reply_markup=inline_keyboard_markup())
 
+    @bot.callback_query_handler(func=lambda c: c.data.startswith('ignore_'))
+    async def ignore_store(call: types.CallbackQuery):
+        if str(call.message.chat.id) != group_chat_id:
+            return
+        _, store_id, store_name = call.data.split('_', 2)
+        logger.info(f"Ignoring store {store_name} (ID: {store_id}) for group {group_chat_id}")
+        await tooGoodToGo.add_to_blacklist(group_chat_id, store_id, store_name)
+        await bot.answer_callback_query(call.id, text=f"Store '{store_name}' has been ignored.")
+        await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id, reply_markup=None)
+
+    @bot.message_handler(commands=['blacklist'])
+    async def manage_blacklist(message):
+        if str(message.chat.id) != group_chat_id:
+            return
+        logger.info(f"Received /blacklist command in group {group_chat_id}")
+        await tooGoodToGo.get_blacklist(group_chat_id)
+
+    @bot.message_handler(commands=['remove_blacklist'])
+    async def remove_from_blacklist(message):
+        if str(message.chat.id) != group_chat_id:
+            return
+        logger.info(f"Received /remove_blacklist command in group {group_chat_id}")
+        try:
+            _, store_id = message.text.split(maxsplit=1)
+            store_id = store_id.strip()
+            blacklisted_stores = tooGoodToGo.db.get_blacklisted_stores(group_chat_id)
+            store_name = next((name for id, name in blacklisted_stores if id == store_id), None)
+            if store_name:
+                await tooGoodToGo.remove_from_blacklist(group_chat_id, store_id, store_name)
+            else:
+                await bot.send_message(group_chat_id, f"Store with ID {store_id} is not in your blacklist.")
+        except ValueError:
+            await bot.send_message(group_chat_id, "Please use the format: /remove_blacklist <store_id>")
+
     async def shutdown():
         logger.info("Shutting down Telegram bot...")
-        # AsyncTeleBot doesn't have a stop_polling method, so we'll just log the shutdown
+        await bot.close()
         logger.info("Telegram bot shutdown complete.")
 
     bot.shutdown = shutdown

@@ -72,25 +72,15 @@ async def main():
     print("Database will be stored in the 'database' folder")
     print("Bot is now running. Press Ctrl+C to stop.")
     
-    polling_task = None
     try:
-        polling_task = asyncio.create_task(bot.polling(non_stop=True, timeout=60))
-        await polling_task
+        await bot.polling(non_stop=True, timeout=60)
     except asyncio.CancelledError:
         logger.info("Bot polling was cancelled")
     except Exception as e:
         logger.error(f"Error during bot polling: {e}")
     finally:
         logger.info("Stopping bot...")
-        if polling_task and not polling_task.done():
-            polling_task.cancel()
-            try:
-                await polling_task
-            except asyncio.CancelledError:
-                pass
-        await bot.shutdown()  # Use the shutdown method
-        if tgtg_handler:
-            await tgtg_handler.shutdown()
+        await tgtg_handler.shutdown()
         logger.info("Bot stopped")
         print("Bot stopped. Goodbye!")
 
