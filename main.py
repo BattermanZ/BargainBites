@@ -27,6 +27,13 @@ config.read('config.ini')
 token = config['Telegram']['token']
 group_chat_id = config['Telegram']['group_chat_id']
 
+# Get admin_ids, defaulting to an empty list if not present
+admin_ids = config['Telegram'].get('admin_ids', '').split(',')
+admin_ids = [id.strip() for id in admin_ids if id.strip()]  # Remove empty strings
+
+if not admin_ids:
+    logger.warning("No admin IDs configured. Admin-only features will be unavailable.")
+
 # Setup TooGoodToGo handler
 tgtg_handler = None
 
@@ -63,12 +70,13 @@ async def main():
     # Setup exception handler
     loop.set_exception_handler(handle_exception)
     
-    tgtg_handler = TooGoodToGo(token, logger)
-    bot = setup_bot(token, group_chat_id, tgtg_handler, logger)
+    tgtg_handler = TooGoodToGo(token, logger, group_chat_id)
+    bot = setup_bot(token, group_chat_id, tgtg_handler, logger, admin_ids)
     
     logger.info("Starting BargainBites bot...")
     print("BargainBites bot is starting...")
     print(f"Bot is configured for group chat ID: {group_chat_id}")
+    print(f"Number of configured admin IDs: {len(admin_ids)}")
     print("Database will be stored in the 'database' folder")
     print("Bot is now running. Press Ctrl+C to stop.")
     

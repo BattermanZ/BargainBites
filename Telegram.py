@@ -3,91 +3,123 @@ import configparser
 from telebot import types
 from telebot.async_telebot import AsyncTeleBot
 
-def setup_bot(token, group_chat_id, tooGoodToGo, logger):
+def setup_bot(token, group_chat_id, tooGoodToGo, logger, admin_ids):
     bot = AsyncTeleBot(token)
 
-    @bot.message_handler(commands=['help', 'start'])
+    def is_admin(user_id):
+        return str(user_id) in admin_ids
+
+    def is_group_chat(chat_id):
+        return str(chat_id) == group_chat_id
+
+    async def check_private_chat_auth(message):
+        user_id = str(message.from_user.id)
+        if is_group_chat(message.chat.id):
+            return True
+        if is_admin(user_id):
+            return True
+        if tooGoodToGo.db.is_user_authorized(user_id):
+            return True
+        await bot.reply_to(message, "You are not authorized to use this bot in private chat. Please use a valid token with /start command.")
+        return False
+
+    @bot.message_handler(commands=['start'])
+    async def start(message):
+        if is_group_chat(message.chat.id):
+            await send_welcome(message)
+        elif is_admin(str(message.from_user.id)):
+            await bot.reply_to(message, f"Welcome, {message.from_user.first_name}! You have full access to the bot.")
+        else:
+            token = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
+            if token and tooGoodToGo.db.validate_token(token):
+                if tooGoodToGo.authorize_user(token, str(message.from_user.id), message.from_user.first_name):
+                    await bot.reply_to(message, f"You have been successfully authorized for private chat access, {message.from_user.first_name}.")
+                else:
+                    await bot.reply_to(message, "Error occurred during authorization. Please try again or contact an admin.")
+            else:
+                await bot.reply_to(message, "Invalid or missing token. Please use a valid token to start the bot in private chat.")
+
+    @bot.message_handler(commands=['help'])
     async def send_welcome(message):
-        if str(message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(message):
             return
-        logger.info(f"Received /start or /help command in group {group_chat_id}")
-        await bot.send_message(group_chat_id,
+        logger.info(f"Received /help command in chat {message.chat.id}")
+        await bot.send_message(message.chat.id,
                                """
-    *Hi welcome to the TGTG Bot:*
+*Hi welcome to the TGTG Bot:*
 
-    The bot will notify this group as soon as new bags from the favorites are available.
+The bot will notify this group as soon as new bags from the favorites are available.
 
-    *❗️️This is necessary if you want to use the bot❗️*
-    🔑 To login into the TooGoodToGo account for this group, enter 
-    */login email@example.com*
-    _You will then receive an email with a confirmation link.
-    You do not need to enter a password._
+*❗️️This is necessary if you want to use the bot❗️*
+🔑 To login into the TooGoodToGo account for this group, enter 
+*/login email@example.com*
+_You will then receive an email with a confirmation link.
+You do not need to enter a password._
 
-    ⚙️ With */settings* you can set when the group wants to be notified. 
+⚙️ With */settings* you can set when the group wants to be notified. 
 
-    ℹ️ With */info* you can display all stores from the favorites where bags are currently available.
+ℹ️ With */info* you can display all stores from the favorites where bags are currently available.
 
-    🚫 Use */blacklist* to manage your ignored stores.
+🚫 Use */blacklist* to manage your ignored stores.
 
-    _🌐 You can find more information about Too Good To Go_ [here](https://www.toogoodtogo.com/).
+_🌐 You can find more information about Too Good To Go_ [here](https://www.toogoodtogo.com/).
 
-    *🌍 LET'S FIGHT food waste TOGETHER 🌎*
-    """, parse_mode="Markdown")
+*🌍 LET'S FIGHT food waste TOGETHER 🌎*
+""", parse_mode="Markdown")
 
     @bot.message_handler(commands=['info'])
     async def send_info(message):
-        if str(message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(message):
             return
-        logger.info(f"Received /info command in group {group_chat_id}")
-        credentials = tooGoodToGo.find_credentials_by_telegramUserID(group_chat_id)
+        logger.info(f"Received /info command in chat {message.chat.id}")
+        credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
         if credentials is None:
-            await bot.send_message(chat_id=group_chat_id,
+            await bot.send_message(chat_id=message.chat.id,
                                    text="🔑 You have to log in with your mail first!\nPlease enter */login email@example.com*\n*❗️️This is necessary if you want to use the bot❗️*",
                                    parse_mode="Markdown")
             return None
-        await tooGoodToGo.send_available_favourite_items_for_one_user(group_chat_id)
+        await tooGoodToGo.send_available_favourite_items_for_one_user(str(message.chat.id))
 
     @bot.message_handler(commands=['login'])
     async def send_login(message):
-        if str(message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(message):
             return
-        logger.info(f"Received /login command in group {group_chat_id}")
-        credentials = tooGoodToGo.find_credentials_by_telegramUserID(group_chat_id)
+        logger.info(f"Received /login command in chat {message.chat.id}")
+        credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
         if credentials is not None:
-            await bot.send_message(chat_id=group_chat_id, text="👍 This group is already logged in!")
+            await bot.send_message(chat_id=message.chat.id, text="👍 This chat is already logged in!")
             return None
         email = message.text.replace('/login', '').lstrip()
         logger.info(f"Login attempt with email: {email}")
 
         if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=group_chat_id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!*\n_You do not need to enter a password._", parse_mode="markdown")
-            await tooGoodToGo.new_user(group_chat_id, email)
+            await bot.send_message(chat_id=message.chat.id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!*\n_You do not need to enter a password._", parse_mode="markdown")
+            await tooGoodToGo.new_user(str(message.chat.id), email)
         else:
-            await bot.send_message(chat_id=group_chat_id,
+            await bot.send_message(chat_id=message.chat.id,
                                    text="*⚠️ No valid mail address ⚠️*\nPlease enter */login email@example.com*\n_You will then receive an email with a confirmation link.\nYou do not need to enter a password._",
                                    parse_mode="Markdown")
 
-    def inline_keyboard_markup():
+    def inline_keyboard_markup(chat_id):
         inline_keyboard = types.InlineKeyboardMarkup(
             keyboard=[
                 [
                     types.InlineKeyboardButton(
-                        text=("🟢" if tooGoodToGo.users_settings_data[group_chat_id]["sold_out"] else "🔴") + " sold out",
+                        text=("🟢" if tooGoodToGo.users_settings_data[chat_id]["sold_out"] else "🔴") + " sold out",
                         callback_data="sold_out"
                     ),
                     types.InlineKeyboardButton(
-                        text=("🟢" if tooGoodToGo.users_settings_data[group_chat_id]["new_stock"] else "🔴") + " new stock",
+                        text=("🟢" if tooGoodToGo.users_settings_data[chat_id]["new_stock"] else "🔴") + " new stock",
                         callback_data="new_stock"
                     )
                 ],
                 [
                     types.InlineKeyboardButton(
-                        text=("🟢" if tooGoodToGo.users_settings_data[group_chat_id]["stock_reduced"] else "🔴") + " stock reduced",
+                        text=("🟢" if tooGoodToGo.users_settings_data[chat_id]["stock_reduced"] else "🔴") + " stock reduced",
                         callback_data="stock_reduced"
                     ),
                     types.InlineKeyboardButton(
-                        text=("🟢" if tooGoodToGo.users_settings_data[group_chat_id][
-                            "stock_increased"] else "🔴") + " stock increased",
+                        text=("🟢" if tooGoodToGo.users_settings_data[chat_id]["stock_increased"] else "🔴") + " stock increased",
                         callback_data="stock_increased"
                     )
                 ],
@@ -108,92 +140,115 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger):
 
     @bot.message_handler(commands=['settings'])
     async def send_settings(message):
-        if str(message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(message):
             return
-        logger.info(f"Received /settings command in group {group_chat_id}")
-        credentials = tooGoodToGo.find_credentials_by_telegramUserID(group_chat_id)
+        logger.info(f"Received /settings command in chat {message.chat.id}")
+        credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
         if credentials is None:
-            await bot.send_message(chat_id=group_chat_id,
+            await bot.send_message(chat_id=message.chat.id,
                                    text="🔑 You have to log in with your mail first!\nPlease enter */login email@example.com*\n*❗️️This is necessary if you want to use the bot❗️*",
                                    parse_mode="Markdown")
             return None
 
-        await bot.send_message(group_chat_id, "🟢 = enabled | 🔴 = disabled  \n*Activate alert if:*", parse_mode="markdown",
-                               reply_markup=inline_keyboard_markup())
+        await bot.send_message(message.chat.id, "🟢 = enabled | 🔴 = disabled\n*Activate alert if:*", parse_mode="markdown",
+                               reply_markup=inline_keyboard_markup(str(message.chat.id)))
 
     @bot.callback_query_handler(func=lambda c: c.data in ['sold_out', 'new_stock', 'stock_reduced', 'stock_increased'])
     async def toggle_setting(call: types.CallbackQuery):
-        if str(call.message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(call.message):
             return
-        logger.info(f"Toggling setting {call.data} in group {group_chat_id}")
-        settings = tooGoodToGo.users_settings_data[group_chat_id][call.data]
-        tooGoodToGo.users_settings_data[group_chat_id][call.data] = 0 if settings else 1
-        await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id,
-                                            reply_markup=inline_keyboard_markup())
+        logger.info(f"Toggling setting {call.data} in chat {call.message.chat.id}")
+        settings = tooGoodToGo.users_settings_data[str(call.message.chat.id)][call.data]
+        tooGoodToGo.users_settings_data[str(call.message.chat.id)][call.data] = 0 if settings else 1
+        await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                            reply_markup=inline_keyboard_markup(str(call.message.chat.id)))
         tooGoodToGo.db.save_users_settings_data(tooGoodToGo.users_settings_data)
 
     @bot.callback_query_handler(func=lambda c: c.data == 'activate_all')
     async def activate_all(call: types.CallbackQuery):
-        if str(call.message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(call.message):
             return
-        logger.info(f"Activating all settings in group {group_chat_id}")
-        for key in tooGoodToGo.users_settings_data[group_chat_id].keys():
-            tooGoodToGo.users_settings_data[group_chat_id][key] = 1
+        logger.info(f"Activating all settings in chat {call.message.chat.id}")
+        for key in tooGoodToGo.users_settings_data[str(call.message.chat.id)].keys():
+            tooGoodToGo.users_settings_data[str(call.message.chat.id)][key] = 1
         tooGoodToGo.db.save_users_settings_data(tooGoodToGo.users_settings_data)
-        await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id,
-                                            reply_markup=inline_keyboard_markup())
+        await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                            reply_markup=inline_keyboard_markup(str(call.message.chat.id)))
 
     @bot.callback_query_handler(func=lambda c: c.data == 'disable_all')
     async def disable_all(call: types.CallbackQuery):
-        if str(call.message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(call.message):
             return
-        logger.info(f"Disabling all settings in group {group_chat_id}")
-        for key in tooGoodToGo.users_settings_data[group_chat_id].keys():
-            tooGoodToGo.users_settings_data[group_chat_id][key] = 0
+        logger.info(f"Disabling all settings in chat {call.message.chat.id}")
+        for key in tooGoodToGo.users_settings_data[str(call.message.chat.id)].keys():
+            tooGoodToGo.users_settings_data[str(call.message.chat.id)][key] = 0
         tooGoodToGo.db.save_users_settings_data(tooGoodToGo.users_settings_data)
-        await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id,
-                                            reply_markup=inline_keyboard_markup())
+        await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                            reply_markup=inline_keyboard_markup(str(call.message.chat.id)))
 
     @bot.callback_query_handler(func=lambda c: c.data.startswith('ignore_'))
     async def ignore_store(call: types.CallbackQuery):
-        if str(call.message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(call.message):
             return
         _, store_id, store_name = call.data.split('_', 2)
-        logger.info(f"Ignoring store {store_name} (ID: {store_id}) for group {group_chat_id}")
-        await tooGoodToGo.add_to_blacklist(group_chat_id, store_id, store_name)
+        logger.info(f"Ignoring store {store_name} (ID: {store_id}) for chat {call.message.chat.id}")
+        await tooGoodToGo.add_to_blacklist(str(call.message.chat.id), store_id, store_name)
         await bot.answer_callback_query(call.id, text=f"Store '{store_name}' has been ignored.")
-        await bot.edit_message_reply_markup(chat_id=group_chat_id, message_id=call.message.message_id, reply_markup=None)
+        await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
 
     @bot.message_handler(commands=['blacklist'])
     async def manage_blacklist(message):
-        if str(message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(message):
             return
-        logger.info(f"Received /blacklist command in group {group_chat_id}")
-        await tooGoodToGo.get_blacklist(group_chat_id)
+        logger.info(f"Received /blacklist command in chat {message.chat.id}")
+        await tooGoodToGo.get_blacklist(str(message.chat.id))
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith('remove_blacklist_'))
     async def callback_remove_blacklist(call):
-        if str(call.message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(call.message):
             return
-        logger.info(f"Received remove_blacklist callback in group {group_chat_id}")
+        logger.info(f"Received remove_blacklist callback in chat {call.message.chat.id}")
         await tooGoodToGo.handle_remove_blacklist_callback(call)
 
     @bot.message_handler(commands=['remove_blacklist'])
     async def remove_from_blacklist(message):
-        if str(message.chat.id) != group_chat_id:
+        if not await check_private_chat_auth(message):
             return
-        logger.info(f"Received /remove_blacklist command in group {group_chat_id}")
+        logger.info(f"Received /remove_blacklist command in chat {message.chat.id}")
         try:
             _, store_id = message.text.split(maxsplit=1)
             store_id = store_id.strip()
-            blacklisted_stores = tooGoodToGo.db.get_blacklisted_stores(group_chat_id)
+            blacklisted_stores = tooGoodToGo.db.get_blacklisted_stores(str(message.chat.id))
             store_name = next((name for id, name in blacklisted_stores if id == store_id), None)
             if store_name:
-                await tooGoodToGo.remove_from_blacklist(group_chat_id, store_id, store_name)
+                await tooGoodToGo.remove_from_blacklist(str(message.chat.id), store_id, store_name)
             else:
-                await bot.send_message(group_chat_id, f"Store with ID {store_id} is not in your blacklist.")
+                await bot.send_message(message.chat.id, f"Store with ID {store_id} is not in your blacklist.")
         except ValueError:
-            await bot.send_message(group_chat_id, "Please use the format: /remove_blacklist <store_id>")
+            await bot.send_message(message.chat.id, "Please use the format: /remove_blacklist <store_id>")
+
+    @bot.message_handler(commands=['generate_token'])
+    async def generate_token(message):
+        if not is_admin(message.from_user.id):
+            await bot.reply_to(message, "You are not authorized to use this command.")
+            return
+        token = tooGoodToGo.db.generate_token()
+        await bot.reply_to(message, f"New token generated: {token}")
+        logger.info(f"Admin {message.from_user.id} generated a new token")
+
+    @bot.message_handler(commands=['list_tokens'])
+    async def list_tokens(message):
+        if not is_admin(message.from_user.id):
+            await bot.reply_to(message, "You are not authorized to use this command.")
+            return
+        tokens = tooGoodToGo.get_all_tokens()
+        response = "List of tokens:\n\n"
+        for token, user_id, first_name in tokens:
+            status = "Used" if user_id else "Unused"
+            user_info = f"User: {first_name} (ID: {user_id})" if user_id else "N/A"
+            response += f"Token: {token}\nStatus: {status}\n{user_info}\n\n"
+        await bot.reply_to(message, response)
+        logger.info(f"Admin {message.from_user.id} requested token list")
 
     async def shutdown():
         logger.info("Shutting down Telegram bot...")

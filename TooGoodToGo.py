@@ -7,11 +7,14 @@ from telebot import types
 from tgtg import TgtgClient
 from database import Database
 import asyncio
+from queue import Queue
+import queue
 
 class TooGoodToGo:
-    def __init__(self, bot_token, logger):
+    def __init__(self, bot_token, logger, group_chat_id):
         self.bot = AsyncTeleBot(bot_token)
         self.logger = logger
+        self.group_chat_id = group_chat_id
         self.db = Database('database/bargain_bites.db')
         self.users_login_data = self.db.get_users_login_data()
         self.users_settings_data = self.db.get_users_settings_data()
@@ -19,11 +22,11 @@ class TooGoodToGo:
         self.connected_clients = {}
         self.client = TgtgClient
         self.shutdown_flag = Event()
-        self.thread = Thread(target=self.get_available_items_per_user)
-        self.thread.start()
-        self.message_queue = asyncio.Queue()
+        self.message_queue = Queue()
         asyncio.create_task(self.process_message_queue())
         asyncio.create_task(self.set_bot_commands())
+        self.thread = Thread(target=self.get_available_items_per_user)
+        self.thread.start()
 
     async def set_bot_commands(self):
         await self.bot.set_my_commands([
@@ -176,44 +179,47 @@ class TooGoodToGo:
                             if user_settings and user_settings[temp_available_items[item_id]] == 1:
                                 message, item_id, store_id, store_name = self.format_message(item, temp_available_items[item_id])
                                 self.logger.info(f"{temp_available_items[item_id]} Telegram USER_ID: {key}\n{message}")
-                                asyncio.run_coroutine_threadsafe(self.message_queue.put((key, message, item_id, store_id, store_name)), asyncio.get_event_loop())
-                if not self.shutdown_flag.is_set():
-                    self.db.save_available_items_favorites(available_items_favorites)
-                    self.shutdown_flag.wait(timeout=60)
+                                self.message_queue.put((key, message, item_id, store_id, store_name))
+                self.db.save_available_items_favorites(available_items_favorites)
             except Exception as err:
                 self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
-                if not self.shutdown_flag.is_set():
-                    time.sleep(60)
+            
+            if not self.shutdown_flag.is_set():
+                self.shutdown_flag.wait(timeout=60)
+        
         self.logger.info("Background thread has finished.")
 
     async def process_message_queue(self):
         while not self.shutdown_flag.is_set():
             try:
-                key, message, item_id, store_id, store_name = await asyncio.wait_for(self.message_queue.get(), timeout=1.0)
+                key, message, item_id, store_id, store_name = await asyncio.get_event_loop().run_in_executor(
+                    None, self.message_queue.get, True, 1.0
+                )
                 try:
                     await self.send_message_with_link(key, message, item_id, store_id, store_name)
+                    self.logger.info(f"Message sent to user {key}")
                 except Exception as e:
                     self.logger.error(f"Error sending message: {e}")
                 finally:
                     self.message_queue.task_done()
-            except asyncio.TimeoutError:
+            except queue.Empty:
                 pass
             except Exception as e:
                 self.logger.error(f"Unexpected error in process_message_queue: {e}", exc_info=True)
                 await asyncio.sleep(1)
 
     async def graceful_shutdown(self):
-       self.logger.info("Initiating graceful shutdown...")
-       self.shutdown_flag.set()
-       self.thread.join(timeout=10)
-       if self.thread.is_alive():
-           self.logger.warning("Background thread did not terminate within the timeout period.")
-       if not self.message_queue.empty():
-           self.logger.info("Waiting for message queue to be processed...")
-           await self.message_queue.join()
-       await self.bot.close()
-       self.db.close()
-       self.logger.info("Graceful shutdown complete.")
+        self.logger.info("Initiating graceful shutdown...")
+        self.shutdown_flag.set()
+        self.thread.join(timeout=10)
+        if self.thread.is_alive():
+            self.logger.warning("Background thread did not terminate within the timeout period.")
+        if not self.message_queue.empty():
+            self.logger.info("Waiting for message queue to be processed...")
+            self.message_queue.join()
+        await self.bot.close()
+        self.db.close()
+        self.logger.info("Graceful shutdown complete.")
 
     async def shutdown(self):
         await self.graceful_shutdown()
@@ -246,13 +252,13 @@ class TooGoodToGo:
     async def handle_remove_blacklist_callback(self, call):
         user_id = call.message.chat.id
         store_id = call.data.split('_')[2]
-        blacklisted_stores = self.db.get_blacklisted_stores(user_id)
+        blacklisted_stores = self.db.get_blacklisted_stores(str(user_id))
         store_name = next((name for id, name in blacklisted_stores if id == store_id), None)
     
         if store_name:
-            await self.remove_from_blacklist(user_id, store_id, store_name)
+            await self.remove_from_blacklist(str(user_id), store_id, store_name)
             await self.bot.answer_callback_query(call.id, text=f"'{store_name}' removed from blacklist.")
-            updated_blacklist = self.db.get_blacklisted_stores(user_id)
+            updated_blacklist = self.db.get_blacklisted_stores(str(user_id))
             if not updated_blacklist:
                 await self.bot.edit_message_text("Your blacklist is now empty.", user_id, call.message.message_id)
             else:
@@ -265,4 +271,22 @@ class TooGoodToGo:
                 await self.bot.edit_message_reply_markup(user_id, call.message.message_id, reply_markup=new_keyboard)
         else:
             await self.bot.answer_callback_query(call.id, text="Store not found in blacklist.")
+
+    def generate_token(self):
+        return self.db.generate_token()
+
+    def validate_token(self, token):
+        return self.db.validate_token(token)
+
+    def authorize_user(self, token, user_id, first_name):
+        return self.db.authorize_user(token, user_id, first_name)
+
+    def get_all_tokens(self):
+        return self.db.get_all_tokens()
+
+    def is_user_authorized(self, user_id):
+        return self.db.is_user_authorized(user_id)
+
+    def is_group_chat(self, chat_id):
+        return str(chat_id) == self.group_chat_id
 

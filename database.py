@@ -1,6 +1,8 @@
 import sqlite3
 import json
 import threading
+import secrets
+import string
 
 class Database:
     _local = threading.local()
@@ -32,6 +34,10 @@ class Database:
         CREATE TABLE IF NOT EXISTS blacklisted_stores
         (user_id TEXT, store_id TEXT, store_name TEXT,
         PRIMARY KEY (user_id, store_id))
+        ''')
+        self._local.cursor.execute('''
+        CREATE TABLE IF NOT EXISTS private_access
+        (token TEXT PRIMARY KEY, user_id TEXT UNIQUE, first_name TEXT)
         ''')
         self._local.conn.commit()
 
@@ -117,6 +123,35 @@ class Database:
         self._local.cursor.execute('SELECT settings FROM users_settings_data WHERE user_id = ?', (user_id,))
         result = self._local.cursor.fetchone()
         return json.loads(result[0]) if result else None
+
+    def generate_token(self):
+        alphabet = string.ascii_letters + string.digits
+        token = ''.join(secrets.choice(alphabet) for _ in range(32))
+        self._connect()
+        self._local.cursor.execute('INSERT INTO private_access (token) VALUES (?)', (token,))
+        self._local.conn.commit()
+        return token
+
+    def validate_token(self, token):
+        self._connect()
+        self._local.cursor.execute('SELECT 1 FROM private_access WHERE token = ?', (token,))
+        return bool(self._local.cursor.fetchone())
+
+    def authorize_user(self, token, user_id, first_name):
+        self._connect()
+        self._local.cursor.execute('UPDATE private_access SET user_id = ?, first_name = ? WHERE token = ?', (user_id, first_name, token))
+        self._local.conn.commit()
+        return self._local.cursor.rowcount > 0
+
+    def is_user_authorized(self, user_id):
+        self._connect()
+        self._local.cursor.execute('SELECT 1 FROM private_access WHERE user_id = ?', (user_id,))
+        return bool(self._local.cursor.fetchone())
+
+    def get_all_tokens(self):
+        self._connect()
+        self._local.cursor.execute('SELECT token, user_id, first_name FROM private_access')
+        return self._local.cursor.fetchall()
 
     def close(self):
         if hasattr(self._local, 'conn') and self._local.conn:
