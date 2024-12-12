@@ -189,7 +189,7 @@ class TooGoodToGo:
                 self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
             
             if not self.shutdown_flag.is_set():
-                self.shutdown_flag.wait(timeout=60)
+                self.shutdown_flag.wait(timeout=300)  # 5 minutes = 300 seconds
         
         self.logger.info("Background thread has finished.")
 
