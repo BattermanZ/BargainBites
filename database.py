@@ -39,6 +39,10 @@ class Database:
         CREATE TABLE IF NOT EXISTS private_access
         (token TEXT PRIMARY KEY, user_id TEXT UNIQUE, first_name TEXT)
         ''')
+        self._local.cursor.execute('''
+CREATE TABLE IF NOT EXISTS admin_users
+(user_id TEXT PRIMARY KEY)
+''')
         self._local.conn.commit()
 
     def get_users_login_data(self):
@@ -158,4 +162,12 @@ class Database:
             self._local.conn.close()
             self._local.conn = None
             self._local.cursor = None
+
+    def is_admin(self, user_id):
+        self._connect()
+        user_id_str = str(user_id)
+        self._local.cursor.execute('SELECT 1 FROM admin_users WHERE user_id = ?', (user_id_str,))
+        result = bool(self._local.cursor.fetchone())
+        print(f"Database admin check for user {user_id_str}: {result}")  # Add this line for debugging
+        return result
 

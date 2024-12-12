@@ -6,29 +6,21 @@ from telebot.async_telebot import AsyncTeleBot
 def setup_bot(token, group_chat_id, tooGoodToGo, logger, admin_ids):
     bot = AsyncTeleBot(token)
 
-    def is_admin(user_id):
-        return str(user_id) in admin_ids
-
-    def is_group_chat(chat_id):
-        return str(chat_id) == group_chat_id
-
-    async def check_private_chat_auth(message):
-        user_id = str(message.from_user.id)
-        if is_group_chat(message.chat.id):
-            return True
-        if is_admin(user_id):
-            return True
-        if tooGoodToGo.db.is_user_authorized(user_id):
-            return True
-        await bot.reply_to(message, "You are not authorized to use this bot in private chat. Please use a valid token with /start command.")
-        return False
+    async def check_authorization(obj):
+        if isinstance(obj, types.CallbackQuery):
+            user_id = str(obj.from_user.id)
+            chat_id = str(obj.message.chat.id)
+        else:  # Assume it's a message
+            user_id = str(obj.from_user.id)
+            chat_id = str(obj.chat.id)
+        is_authorized = await tooGoodToGo.check_authorization(user_id, chat_id)
+        logger.info(f"Authorization check for user {user_id} in chat {chat_id}: {is_authorized}")
+        return is_authorized
 
     @bot.message_handler(commands=['start'])
     async def start(message):
-        if is_group_chat(message.chat.id):
+        if await check_authorization(message):
             await send_welcome(message)
-        elif is_admin(str(message.from_user.id)):
-            await bot.reply_to(message, f"Welcome, {message.from_user.first_name}! You have full access to the bot.")
         else:
             token = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
             if token and tooGoodToGo.db.validate_token(token):
@@ -41,7 +33,8 @@ def setup_bot(token, group_chat_id, tooGoodToGo, logger, admin_ids):
 
     @bot.message_handler(commands=['help'])
     async def send_welcome(message):
-        if not await check_private_chat_auth(message):
+        if not await check_authorization(message):
+            await bot.reply_to(message, "You are not authorized to use this command.")
             return
         logger.info(f"Received /help command in chat {message.chat.id}")
         await bot.send_message(message.chat.id,
@@ -69,7 +62,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.message_handler(commands=['info'])
     async def send_info(message):
-        if not await check_private_chat_auth(message):
+        if not await check_authorization(message):
             return
         logger.info(f"Received /info command in chat {message.chat.id}")
         credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
@@ -82,7 +75,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.message_handler(commands=['login'])
     async def send_login(message):
-        if not await check_private_chat_auth(message):
+        if not await check_authorization(message):
             return
         logger.info(f"Received /login command in chat {message.chat.id}")
         credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
@@ -93,7 +86,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
         logger.info(f"Login attempt with email: {email}")
 
         if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=message.chat.id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!*\n_You do not need to enter a password._", parse_mode="markdown")
+            await bot.send_message(chat_id=message.chat.id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!* (on your PC or on a phone without the Too Good To Go app)\n_You do not need to enter a password._", parse_mode="markdown")
             await tooGoodToGo.new_user(str(message.chat.id), email)
         else:
             await bot.send_message(chat_id=message.chat.id,
@@ -140,7 +133,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.message_handler(commands=['settings'])
     async def send_settings(message):
-        if not await check_private_chat_auth(message):
+        if not await check_authorization(message):
             return
         logger.info(f"Received /settings command in chat {message.chat.id}")
         credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
@@ -155,7 +148,8 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.callback_query_handler(func=lambda c: c.data in ['sold_out', 'new_stock', 'stock_reduced', 'stock_increased'])
     async def toggle_setting(call: types.CallbackQuery):
-        if not await check_private_chat_auth(call.message):
+        if not await check_authorization(call):
+            await bot.answer_callback_query(call.id, text="You are not authorized to perform this action.")
             return
         logger.info(f"Toggling setting {call.data} in chat {call.message.chat.id}")
         settings = tooGoodToGo.users_settings_data[str(call.message.chat.id)][call.data]
@@ -166,7 +160,8 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.callback_query_handler(func=lambda c: c.data == 'activate_all')
     async def activate_all(call: types.CallbackQuery):
-        if not await check_private_chat_auth(call.message):
+        if not await check_authorization(call):
+            await bot.answer_callback_query(call.id, text="You are not authorized to perform this action.")
             return
         logger.info(f"Activating all settings in chat {call.message.chat.id}")
         for key in tooGoodToGo.users_settings_data[str(call.message.chat.id)].keys():
@@ -177,7 +172,8 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.callback_query_handler(func=lambda c: c.data == 'disable_all')
     async def disable_all(call: types.CallbackQuery):
-        if not await check_private_chat_auth(call.message):
+        if not await check_authorization(call):
+            await bot.answer_callback_query(call.id, text="You are not authorized to perform this action.")
             return
         logger.info(f"Disabling all settings in chat {call.message.chat.id}")
         for key in tooGoodToGo.users_settings_data[str(call.message.chat.id)].keys():
@@ -188,31 +184,36 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.callback_query_handler(func=lambda c: c.data.startswith('ignore_'))
     async def ignore_store(call: types.CallbackQuery):
-        if not await check_private_chat_auth(call.message):
+        if not await check_authorization(call):
+            await bot.answer_callback_query(call.id, text="You are not authorized to perform this action.")
             return
         _, store_id, store_name = call.data.split('_', 2)
         logger.info(f"Ignoring store {store_name} (ID: {store_id}) for chat {call.message.chat.id}")
-        await tooGoodToGo.add_to_blacklist(str(call.message.chat.id), store_id, store_name)
-        await bot.answer_callback_query(call.id, text=f"Store '{store_name}' has been ignored.")
-        await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+        success = await tooGoodToGo.add_to_blacklist(str(call.message.chat.id), store_id, store_name)
+        if success:
+            await bot.answer_callback_query(call.id, text=f"Store '{store_name}' has been ignored.")
+            await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+        else:
+            await bot.answer_callback_query(call.id, text="Failed to ignore store. Please try again.")
 
     @bot.message_handler(commands=['blacklist'])
     async def manage_blacklist(message):
-        if not await check_private_chat_auth(message):
+        if not await check_authorization(message):
             return
         logger.info(f"Received /blacklist command in chat {message.chat.id}")
         await tooGoodToGo.get_blacklist(str(message.chat.id))
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith('remove_blacklist_'))
     async def callback_remove_blacklist(call):
-        if not await check_private_chat_auth(call.message):
+        if not await check_authorization(call):
+            await bot.answer_callback_query(call.id, text="You are not authorized to perform this action.")
             return
         logger.info(f"Received remove_blacklist callback in chat {call.message.chat.id}")
         await tooGoodToGo.handle_remove_blacklist_callback(call)
 
     @bot.message_handler(commands=['remove_blacklist'])
     async def remove_from_blacklist(message):
-        if not await check_private_chat_auth(message):
+        if not await check_authorization(message):
             return
         logger.info(f"Received /remove_blacklist command in chat {message.chat.id}")
         try:
@@ -229,8 +230,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.message_handler(commands=['generate_token'])
     async def generate_token(message):
-        if not is_admin(message.from_user.id):
-            await bot.reply_to(message, "You are not authorized to use this command.")
+        if not await check_authorization(message):
             return
         token = tooGoodToGo.db.generate_token()
         await bot.reply_to(message, f"New token generated: {token}")
@@ -238,8 +238,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     @bot.message_handler(commands=['list_tokens'])
     async def list_tokens(message):
-        if not is_admin(message.from_user.id):
-            await bot.reply_to(message, "You are not authorized to use this command.")
+        if not await check_authorization(message):
             return
         tokens = tooGoodToGo.get_all_tokens()
         response = "List of tokens:\n\n"
@@ -257,4 +256,3 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
 
     bot.shutdown = shutdown
     return bot
-

@@ -31,6 +31,8 @@ group_chat_id = config['Telegram']['group_chat_id']
 admin_ids = config['Telegram'].get('admin_ids', '').split(',')
 admin_ids = [id.strip() for id in admin_ids if id.strip()]  # Remove empty strings
 
+logger.info(f"Loaded admin IDs: {admin_ids}")
+
 if not admin_ids:
     logger.warning("No admin IDs configured. Admin-only features will be unavailable.")
 
@@ -70,7 +72,7 @@ async def main():
     # Setup exception handler
     loop.set_exception_handler(handle_exception)
     
-    tgtg_handler = TooGoodToGo(token, logger, group_chat_id)
+    tgtg_handler = TooGoodToGo(token, logger, group_chat_id, admin_ids)
     bot = setup_bot(token, group_chat_id, tgtg_handler, logger, admin_ids)
     
     logger.info("Starting BargainBites bot...")

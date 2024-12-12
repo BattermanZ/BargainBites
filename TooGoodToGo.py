@@ -11,10 +11,11 @@ from queue import Queue
 import queue
 
 class TooGoodToGo:
-    def __init__(self, bot_token, logger, group_chat_id):
+    def __init__(self, bot_token, logger, group_chat_id, admin_ids):
         self.bot = AsyncTeleBot(bot_token)
         self.logger = logger
         self.group_chat_id = group_chat_id
+        self.admin_ids = [str(id) for id in admin_ids]  # Ensure all admin IDs are strings
         self.db = Database('database/bargain_bites.db')
         self.users_login_data = self.db.get_users_login_data()
         self.users_settings_data = self.db.get_users_settings_data()
@@ -27,6 +28,7 @@ class TooGoodToGo:
         asyncio.create_task(self.set_bot_commands())
         self.thread = Thread(target=self.get_available_items_per_user)
         self.thread.start()
+        self.logger.info(f"TooGoodToGo initialized with admin IDs: {self.admin_ids}")
 
     async def set_bot_commands(self):
         await self.bot.set_my_commands([
@@ -108,7 +110,9 @@ class TooGoodToGo:
 
         status_headers = {
             'new_stock': '*NEW BAGS AVAILABLE* 🛍️\n\n',
-            'sold_out': '*SOLD-OUT* 🥺\n\n'
+            'sold_out': '*SOLD-OUT* 🥺\n\n',
+            'stock_increased': '*STOCK INCREASED* 📈\n\n',
+            'stock_reduced': '*STOCK REDUCED* 📉\n\n'
         }
 
         message = status_headers.get(status, '')
@@ -224,18 +228,59 @@ class TooGoodToGo:
     async def shutdown(self):
         await self.graceful_shutdown()
 
+    def is_admin(self, user_id):
+        user_id_str = str(user_id)
+        is_admin = user_id_str in self.admin_ids or self.db.is_admin(user_id_str)
+        self.logger.info(f"Admin check for user {user_id_str}: {is_admin}")
+        self.logger.info(f"Current admin IDs: {self.admin_ids}")
+        return is_admin
+
+    def is_user_authorized(self, user_id):
+        user_id_str = str(user_id)
+        is_admin = self.is_admin(user_id_str)
+        is_authorized = self.db.is_user_authorized(user_id_str)
+        self.logger.info(f"Authorization check for user {user_id_str}: Admin: {is_admin}, Authorized: {is_authorized}")
+        return is_admin or is_authorized
+
+    async def check_authorization(self, user_id, chat_id):
+        user_id = str(user_id)
+        chat_id = str(chat_id)
+        self.logger.info(f"Checking authorization for user {user_id} in chat {chat_id}")
+        if self.is_group_chat(chat_id):
+            self.logger.info(f"Authorized: Group chat {chat_id}")
+            return True
+        if self.is_admin(user_id):
+            self.logger.info(f"Authorized: Admin user {user_id}")
+            return True
+        if self.is_user_authorized(user_id):
+            self.logger.info(f"Authorized: Authorized user {user_id}")
+            return True
+        self.logger.info(f"Not authorized: User {user_id} in chat {chat_id}")
+        return False
+
     async def add_to_blacklist(self, user_id, store_id, store_name):
+        if not await self.check_authorization(user_id, user_id):
+            self.logger.warning(f"Unauthorized blacklist attempt by user {user_id}")
+            return False
         self.db.add_blacklisted_store(user_id, store_id, store_name)
         message = (f"Store '{store_name}' has been added to your blacklist.\n\n"
                    f"To view and manage your blacklist, use the /blacklist command. "
                    f"You can easily remove stores from your blacklist using the provided buttons.")
         await self.send_message(user_id, message)
+        return True
 
     async def remove_from_blacklist(self, user_id, store_id, store_name):
+        if not await self.check_authorization(user_id, user_id):
+            self.logger.warning(f"Unauthorized blacklist removal attempt by user {user_id}")
+            return False
         self.db.remove_blacklisted_store(user_id, store_id)
         await self.send_message(user_id, f"Store '{store_name}' has been removed from your blacklist.")
+        return True
 
     async def get_blacklist(self, user_id):
+        if not await self.check_authorization(user_id, user_id):
+            self.logger.warning(f"Unauthorized blacklist access attempt by user {user_id}")
+            return False
         blacklisted_stores = self.db.get_blacklisted_stores(user_id)
         if not blacklisted_stores:
             await self.send_message(user_id, "You haven't blacklisted any stores yet.")
@@ -248,6 +293,7 @@ class TooGoodToGo:
                 buttons.append(button)
             keyboard.add(*buttons)
             await self.bot.send_message(user_id, message, reply_markup=keyboard)
+        return True
 
     async def handle_remove_blacklist_callback(self, call):
         user_id = call.message.chat.id
@@ -256,6 +302,9 @@ class TooGoodToGo:
         store_name = next((name for id, name in blacklisted_stores if id == store_id), None)
     
         if store_name:
+            if not await self.check_authorization(user_id, user_id):
+                self.logger.warning(f"Unauthorized blacklist removal attempt by user {user_id}")
+                return False
             await self.remove_from_blacklist(str(user_id), store_id, store_name)
             await self.bot.answer_callback_query(call.id, text=f"'{store_name}' removed from blacklist.")
             updated_blacklist = self.db.get_blacklisted_stores(str(user_id))
@@ -271,6 +320,7 @@ class TooGoodToGo:
                 await self.bot.edit_message_reply_markup(user_id, call.message.message_id, reply_markup=new_keyboard)
         else:
             await self.bot.answer_callback_query(call.id, text="Store not found in blacklist.")
+        return True
 
     def generate_token(self):
         return self.db.generate_token()
@@ -279,13 +329,12 @@ class TooGoodToGo:
         return self.db.validate_token(token)
 
     def authorize_user(self, token, user_id, first_name):
-        return self.db.authorize_user(token, user_id, first_name)
+        result = self.db.authorize_user(token, user_id, first_name)
+        self.logger.info(f"Authorizing user {user_id} with token: {'Success' if result else 'Failure'}")
+        return result
 
     def get_all_tokens(self):
         return self.db.get_all_tokens()
-
-    def is_user_authorized(self, user_id):
-        return self.db.is_user_authorized(user_id)
 
     def is_group_chat(self, chat_id):
         return str(chat_id) == self.group_chat_id
