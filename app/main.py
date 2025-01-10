@@ -2,16 +2,26 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 import asyncio
-import configparser
+from dotenv import load_dotenv
 from Telegram import setup_bot
 from TooGoodToGo import TooGoodToGo
 import signal
 
-# Get the directory where main.py is located
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Get the project root directory (one level up from app directory)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Setup logging
-logs_dir = os.path.join(BASE_DIR, 'logs')
+# Load environment variables from project root
+env_path = os.path.join(PROJECT_ROOT, '.env')
+if not os.path.exists(env_path):
+    raise FileNotFoundError(
+        f".env file not found at: {env_path}\n"
+        f"Please copy .env.template to .env and fill in your values."
+    )
+load_dotenv(env_path)
+
+# Setup logging in project root
+logs_dir = os.path.join(PROJECT_ROOT, 'logs')
 if not os.path.exists(logs_dir):
     os.makedirs(logs_dir)
 
@@ -35,24 +45,18 @@ logging.basicConfig(
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
-# Create database directory if it doesn't exist
-db_dir = os.path.join(BASE_DIR, 'database')
+# Create database directory in project root
+db_dir = os.path.join(PROJECT_ROOT, 'database')
 os.makedirs(db_dir, exist_ok=True)
 
-# Read configuration
-config = configparser.ConfigParser()
-config_path = os.path.join(BASE_DIR, 'config.ini')
-logger.info(f"Loading config from: {config_path}")
-if not os.path.exists(config_path):
-    logger.error(f"Config file not found at: {config_path}")
-    raise FileNotFoundError(f"Config file not found at: {config_path}")
+# Get configuration from environment variables
+token = os.getenv('TELEGRAM_BOT_TOKEN')
+if not token:
+    raise ValueError("TELEGRAM_BOT_TOKEN not found in environment variables")
 
-config.read(config_path)
-token = config['Telegram']['token']
-
-# Get admin_ids, defaulting to an empty list if not present
-admin_ids = config['Telegram'].get('admin_ids', '').split(',')
-admin_ids = [id.strip() for id in admin_ids if id.strip()]  # Remove empty strings
+# Get admin_ids from environment
+admin_ids_str = os.getenv('TELEGRAM_ADMIN_IDS', '')
+admin_ids = [id.strip() for id in admin_ids_str.split(',') if id.strip()]
 
 logger.info(f"Loaded admin IDs: {admin_ids}")
 

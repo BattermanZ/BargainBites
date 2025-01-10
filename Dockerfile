@@ -27,7 +27,7 @@ FROM python:3.13-slim
 # Set work directory
 WORKDIR /app
 
-# Install runtime dependencies (adjust as needed)
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev libssl-dev libffi-dev && \
     rm -rf /var/lib/apt/lists/*
@@ -42,7 +42,8 @@ RUN mkdir -p /app/logs /app/database
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Run the application
-CMD ["python", "main.py"]
+CMD ["python", "app/main.py"]
 

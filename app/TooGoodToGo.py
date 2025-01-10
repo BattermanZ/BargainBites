@@ -19,9 +19,9 @@ class TooGoodToGo:
         self.logger = logger
         self.admin_ids = [str(id) for id in admin_ids]  # Ensure all admin IDs are strings
         
-        # Get the directory where the script is located
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        db_path = os.path.join(base_dir, 'database', 'bargain_bites.db')
+        # Get the project root directory
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_path = os.path.join(project_root, 'database', 'bargain_bites.db')
         
         self.db = Database(db_path)
         self.users_login_data = self.db.get_users_login_data()

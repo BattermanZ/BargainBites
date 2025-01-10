@@ -20,7 +20,8 @@
 
 - Docker (optional)
 - A Too Good To Go account
-- A Telegram bot token and group chat ID
+- A Telegram bot token
+- Python 3.12 or higher
 
 ### Setup
 
@@ -38,18 +39,24 @@
    docker run -d --name bargainbites-container bargainbites
    ```
 
-3. Create a `config.ini` file:
+3. Create a `.env` file from the template:
 
+   ```bash
+   cp .env.example .env
+   ```
+
+   Then edit `.env` with your values:
    ```ini
-   [Telegram]
-   token = <your-telegram-bot-token>
-   group_chat_id = <your-telegram-group-chat-id> # group_chat_id is optional. Use it for group chat notifications
-   admin_ids = <comma-separated-admin-ids>
+   TELEGRAM_BOT_TOKEN=your_bot_token_here
+   TELEGRAM_ADMIN_IDS=comma_separated_admin_ids  # e.g., 123456789,987654321
    ```
 
 4. Run without Docker:
 
    ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
    python3 app/main.py
    ```
 
@@ -119,22 +126,42 @@ Notification settings are managed using an inline keyboard:
 
 ### Background Checks
 
-- The app automatically checks for new available bags from your favourites every 5 minutes and sends notifications if any changes are detected.
+- The app automatically checks for new available bags from your favourites every 15 minutes with random intervals to avoid bot detection.
+- Additional random delays between user checks (20-40 seconds) help prevent CAPTCHA challenges.
+- The timing includes random jitter (±2 minutes) and small noise (±10 seconds) for less predictable behavior.
 
 ## Project Layout
 
 ```
-├── app
+├── app/
 │   ├── database.py          # Handles SQLite database
-│   ├── TooGoodToGo.py       # Talks to the Too Good To Go API
-│   ├── Telegram.py          # Manages Telegram bot
-│   ├── main.py              # Runs everything
-├── Dockerfile               # Docker setup
-├── requirements.txt         # Python dependencies
-├── config.ini               # Bot and API credentials
-├── database/                # Where SQLite stores data
-└── logs/                    # Keeps logs
+│   ├── TooGoodToGo.py      # Talks to the Too Good To Go API
+│   ├── Telegram.py         # Manages Telegram bot
+│   ├── main.py             # Runs everything
+├── Dockerfile              # Docker setup
+├── requirements.txt        # Python dependencies
+├── .env                   # Environment variables (not in git)
+├── .env.example           # Template for .env file
+├── database/              # Where SQLite stores data
+└── logs/                  # Keeps logs
 ```
+
+## Environment Variables
+
+The app uses a `.env` file for configuration:
+
+- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token from @BotFather
+- `TELEGRAM_ADMIN_IDS`: Comma-separated list of Telegram user IDs for admin access
+
+## Anti-Bot Protection
+
+The app implements several measures to avoid triggering Too Good To Go's bot detection:
+
+- Random delays between checks (15 minutes base with ±2 minutes jitter)
+- Additional small random noise (±10 seconds) for less predictable timing
+- Increased delays between user checks (20-40 seconds)
+- Automatic handling of rate limits and CAPTCHA challenges
+- Random shuffling of user order during checks
 
 ## AI Warning
 

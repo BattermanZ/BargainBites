@@ -50,8 +50,11 @@ Thumbs.db
 logs/
 *.log
 database/
+*.db
+*.sqlite
+*.sqlite3
 
 # Keep
 !requirements.txt
-!config.ini
+!.env.example
 
