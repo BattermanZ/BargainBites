@@ -7,25 +7,48 @@ from Telegram import setup_bot
 from TooGoodToGo import TooGoodToGo
 import signal
 
-# Setup logging
-if not os.path.exists('logs'):
-    os.makedirs('logs')
+# Get the directory where main.py is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-logging.basicConfig(level=logging.INFO)
+# Setup logging
+logs_dir = os.path.join(BASE_DIR, 'logs')
+if not os.path.exists(logs_dir):
+    os.makedirs(logs_dir)
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        # Console handler for Docker/Dozzle
+        logging.StreamHandler(),
+        # File handler for local logs
+        RotatingFileHandler(
+            os.path.join(logs_dir, 'bargain_bites.log'),
+            maxBytes=10*1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        )
+    ]
+)
+
+# Get logger for this module
 logger = logging.getLogger(__name__)
-handler = RotatingFileHandler('logs/bargain_bites.log', maxBytes=10*1024*1024, backupCount=5)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
 
 # Create database directory if it doesn't exist
-os.makedirs('database', exist_ok=True)
+db_dir = os.path.join(BASE_DIR, 'database')
+os.makedirs(db_dir, exist_ok=True)
 
 # Read configuration
 config = configparser.ConfigParser()
-config.read('config.ini')
+config_path = os.path.join(BASE_DIR, 'config.ini')
+logger.info(f"Loading config from: {config_path}")
+if not os.path.exists(config_path):
+    logger.error(f"Config file not found at: {config_path}")
+    raise FileNotFoundError(f"Config file not found at: {config_path}")
+
+config.read(config_path)
 token = config['Telegram']['token']
-group_chat_id = config['Telegram']['group_chat_id']
 
 # Get admin_ids, defaulting to an empty list if not present
 admin_ids = config['Telegram'].get('admin_ids', '').split(',')
@@ -43,20 +66,29 @@ async def shutdown(signal, loop):
     """Cleanup tasks tied to the service's shutdown."""
     logger.info(f"Received exit signal {signal.name}...")
     
-    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-
-    for task in tasks:
-        task.cancel()
-
-    logger.info(f"Cancelling {len(tasks)} outstanding tasks")
-    await asyncio.gather(*tasks, return_exceptions=True)
-    loop.stop()
+    try:
+        # First stop the bot and TGTG handler
+        if tgtg_handler:
+            logger.info("Stopping bot and TGTG handler...")
+            await tgtg_handler.shutdown()
+        
+        # Then cancel remaining tasks
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if tasks:
+            logger.info(f"Cancelling {len(tasks)} outstanding tasks")
+            for task in tasks:
+                task.cancel()
+            # Wait for tasks to complete with timeout
+            await asyncio.wait(tasks, timeout=5)
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
 
 def handle_exception(loop, context):
     msg = context.get("exception", context["message"])
     logger.error(f"Caught exception: {msg}")
-    logger.info("Shutting down...")
-    asyncio.create_task(shutdown(signal.SIGTERM, loop))
+    logger.info("Shutting down due to exception...")
+    if not loop.is_closed():
+        asyncio.create_task(shutdown(signal.SIGTERM, loop))
 
 async def main():
     global tgtg_handler
@@ -72,12 +104,11 @@ async def main():
     # Setup exception handler
     loop.set_exception_handler(handle_exception)
     
-    tgtg_handler = TooGoodToGo(token, logger, group_chat_id, admin_ids)
-    bot = setup_bot(token, group_chat_id, tgtg_handler, logger, admin_ids)
+    tgtg_handler = TooGoodToGo(token, logger, admin_ids)
+    bot = setup_bot(token, tgtg_handler, logger, admin_ids)
     
     logger.info("Starting BargainBites bot...")
     print("BargainBites bot is starting...")
-    print(f"Bot is configured for group chat ID: {group_chat_id}")
     print(f"Number of configured admin IDs: {len(admin_ids)}")
     print("Database will be stored in the 'database' folder")
     print("Bot is now running. Press Ctrl+C to stop.")
@@ -89,11 +120,16 @@ async def main():
     except Exception as e:
         logger.error(f"Error during bot polling: {e}")
     finally:
-        logger.info("Stopping bot...")
-        await tgtg_handler.shutdown()
         logger.info("Bot stopped")
         print("Bot stopped. Goodbye!")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nShutdown initiated by keyboard interrupt...")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+    finally:
+        print("Goodbye!")
 

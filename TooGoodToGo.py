@@ -9,14 +9,21 @@ from database import Database
 import asyncio
 from queue import Queue
 import queue
+import random
+from tgtg.exceptions import TgtgAPIError
+import os
 
 class TooGoodToGo:
-    def __init__(self, bot_token, logger, group_chat_id, admin_ids):
+    def __init__(self, bot_token, logger, admin_ids):
         self.bot = AsyncTeleBot(bot_token)
         self.logger = logger
-        self.group_chat_id = group_chat_id
         self.admin_ids = [str(id) for id in admin_ids]  # Ensure all admin IDs are strings
-        self.db = Database('database/bargain_bites.db')
+        
+        # Get the directory where the script is located
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        db_path = os.path.join(base_dir, 'database', 'bargain_bites.db')
+        
+        self.db = Database(db_path)
         self.users_login_data = self.db.get_users_login_data()
         self.users_settings_data = self.db.get_users_settings_data()
         self.available_items_favorites = self.db.get_available_items_favorites()
@@ -69,22 +76,84 @@ class TooGoodToGo:
     def find_credentials_by_telegramUserID(self, user_id):
         return self.users_login_data.get(user_id)
 
-    def connect(self, user_id):
-        if user_id in self.connected_clients:
-            self.client = self.connected_clients[user_id]
-        else:
+    def refresh_credentials(self, user_id):
+        """
+        Attempt to refresh credentials for a specific user.
+        If refresh fails, remove the user from connected clients.
+        """
+        try:
             user_credentials = self.find_credentials_by_telegramUserID(user_id)
-            if user_credentials:
-                self.client = TgtgClient(access_token=user_credentials["access_token"],
-                                         refresh_token=user_credentials["refresh_token"],
-                                         cookie=user_credentials["cookie"])
-                self.connected_clients[user_id] = self.client
-                time.sleep(3)
+            if not user_credentials:
+                self.logger.error(f"No credentials found for user {user_id}")
+                return False
+
+            # Try to refresh the client
+            new_client = TgtgClient(access_token=user_credentials["access_token"],
+                                    refresh_token=user_credentials["refresh_token"],
+                                    cookie=user_credentials["cookie"])
+            
+            # Get new credentials after refresh
+            new_credentials = new_client.get_credentials()
+            
+            # Update stored credentials
+            self.users_login_data[user_id] = new_credentials
+            self.db.save_users_login_data(self.users_login_data)
+            
+            # Update connected clients
+            self.connected_clients[user_id] = new_client
+            self.client = new_client
+            
+            self.logger.info(f"Successfully refreshed credentials for user {user_id}")
+            return True
+        
+        except Exception as e:
+            self.logger.error(f"Failed to refresh credentials for user {user_id}: {str(e)}")
+            # Remove from connected clients if refresh fails
+            if user_id in self.connected_clients:
+                del self.connected_clients[user_id]
+            return False
+
+    def connect(self, user_id):
+        try:
+            if user_id in self.connected_clients:
+                self.client = self.connected_clients[user_id]
             else:
-                raise Exception(f"No credentials found for user ID: {user_id}")
+                user_credentials = self.find_credentials_by_telegramUserID(user_id)
+                if user_credentials:
+                    self.client = TgtgClient(access_token=user_credentials["access_token"],
+                                             refresh_token=user_credentials["refresh_token"],
+                                             cookie=user_credentials["cookie"])
+                    self.connected_clients[user_id] = self.client
+                else:
+                    raise Exception(f"No credentials found for user ID: {user_id}")
+            
+            # Add random delay
+            time.sleep(random.uniform(5, 10))
+        
+        except Exception as e:
+            # If initial connection fails, try to refresh
+            self.logger.warning(f"Initial connection failed for user {user_id}: {str(e)}")
+            if not self.refresh_credentials(user_id):
+                # If refresh also fails, remove user from processing
+                self.logger.error(f"Could not connect or refresh for user {user_id}")
+                raise
 
     def get_favourite_items(self):
-        return self.client.get_items()
+        max_retries = 3
+        base_delay = 5
+        
+        for attempt in range(max_retries):
+            try:
+                return self.client.get_items()
+            except TgtgAPIError as e:
+                if "captcha" in str(e).lower():
+                    delay = base_delay * (2 ** attempt) + random.uniform(1, 5)
+                    self.logger.warning(f"CAPTCHA detected, waiting {delay:.2f} seconds before retry...")
+                    time.sleep(delay)
+                    if attempt == max_retries - 1:
+                        raise
+                else:
+                    raise
 
     def format_message(self, item, status=None):
         store_name = item['store']['store_name']
@@ -145,51 +214,119 @@ class TooGoodToGo:
             await self.send_message(user_id, "❌ An error occurred while fetching available items. Please try again later.")
 
     def get_available_items_per_user(self):
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
         while not self.shutdown_flag.is_set():
             try:
+                # Reset consecutive errors on successful iteration
+                consecutive_errors = 0
+                
                 users_login_data = self.db.get_users_login_data()
                 available_items_favorites = self.db.get_available_items_favorites()
                 temp_available_items = {}
-                for key in list(users_login_data.keys()):
+                
+                # Shuffle users to distribute load and reduce predictability
+                user_keys = list(users_login_data.keys())
+                random.shuffle(user_keys)
+                
+                for key in user_keys:
                     if self.shutdown_flag.is_set():
                         break
-                    self.connect(key)
-                    time.sleep(1)
-                    available_items = self.get_favourite_items()
-                    for item in available_items:
-                        if self.shutdown_flag.is_set():
-                            break
-                        status = None
-                        item_id = item['item']['item_id']
-                        store_id = item['store']['store_id']
-                        if self.db.is_store_blacklisted(key, store_id):
-                            continue
-                        if item_id in available_items_favorites and item_id not in temp_available_items:
-                            old_items_available = int(available_items_favorites[item_id]['items_available'])
+                    
+                    try:
+                        # Attempt to connect and get items
+                        self.connect(key)
+                        
+                        # Add random delay between user checks (increased from 10-20 to 20-40 seconds)
+                        time.sleep(random.uniform(20, 40))
+                        
+                        # Get available items
+                        available_items = self.get_favourite_items()
+                        
+                        # Process each available item
+                        for item in available_items:
+                            if self.shutdown_flag.is_set():
+                                break
+                            
+                            status = None
+                            item_id = item['item']['item_id']
+                            store_id = item['store']['store_id']
+                            
+                            # Skip blacklisted stores
+                            if self.db.is_store_blacklisted(key, store_id):
+                                continue
+                            
+                            status = None
                             new_items_available = int(item['items_available'])
-                            if new_items_available == 0 and old_items_available > 0:
-                                status = "sold_out"
-                            elif old_items_available == 0 and new_items_available > 0:
-                                status = "new_stock"
-                            elif old_items_available > new_items_available:
-                                status = "stock_reduced"
-                            elif old_items_available < new_items_available:
-                                status = "stock_increased"
-                            if status:
-                                temp_available_items[item_id] = status
-                        available_items_favorites[item_id] = item
-                        if item_id in temp_available_items:
-                            user_settings = self.db.get_user_settings(key)
-                            if user_settings and user_settings[temp_available_items[item_id]] == 1:
-                                message, item_id, store_id, store_name = self.format_message(item, temp_available_items[item_id])
-                                self.logger.info(f"{temp_available_items[item_id]} Telegram USER_ID: {key}\n{message}")
-                                self.message_queue.put((key, message, item_id, store_id, store_name))
+                            
+                            # Check if this is a completely new item
+                            if item_id not in available_items_favorites:
+                                if new_items_available > 0:
+                                    status = "new_stock"
+                                    temp_available_items[item_id] = status
+                            # Check for changes in existing items
+                            elif item_id not in temp_available_items:
+                                old_items_available = int(available_items_favorites[item_id]['items_available'])
+                                
+                                # Determine status based on availability changes
+                                if new_items_available == 0 and old_items_available > 0:
+                                    status = "sold_out"
+                                elif old_items_available == 0 and new_items_available > 0:
+                                    status = "new_stock"
+                                elif old_items_available > new_items_available:
+                                    status = "stock_reduced"
+                                elif old_items_available < new_items_available:
+                                    status = "stock_increased"
+                                
+                                if status:
+                                    temp_available_items[item_id] = status
+                            
+                            # Update available items
+                            available_items_favorites[item_id] = item
+                            
+                            # Send notifications for changed items
+                            if item_id in temp_available_items:
+                                user_settings = self.db.get_user_settings(key)
+                                if user_settings and user_settings[temp_available_items[item_id]] == 1:
+                                    message, item_id, store_id, store_name = self.format_message(item, temp_available_items[item_id])
+                                    self.logger.info(f"{temp_available_items[item_id]} Telegram USER_ID: {key}\n{message}")
+                                    self.message_queue.put((key, message, item_id, store_id, store_name))
+                    
+                    except Exception as e:
+                        # Log individual user processing errors
+                        self.logger.error(f"Error processing user {key}: {str(e)}")
+                        consecutive_errors += 1
+                        
+                        # If too many consecutive errors, pause processing
+                        if consecutive_errors >= max_consecutive_errors:
+                            self.logger.critical(f"Reached max consecutive errors ({max_consecutive_errors}). Pausing processing.")
+                            break
+                        
+                        continue
+                
+                # Save updated available items
                 self.db.save_available_items_favorites(available_items_favorites)
-            except Exception as err:
-                self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
             
+            except Exception as err:
+                # Log unexpected global errors
+                self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
+                consecutive_errors += 1
+                
+                # If too many consecutive errors, add a longer pause
+                if consecutive_errors >= max_consecutive_errors:
+                    self.logger.critical(f"Reached max consecutive errors ({max_consecutive_errors}). Adding extended pause.")
+                    time.sleep(3600)  # 1-hour pause
+                    consecutive_errors = 0
+            
+            # Add random jitter to the main loop delay (between 13 and 17 minutes)
             if not self.shutdown_flag.is_set():
-                self.shutdown_flag.wait(timeout=300)  # 5 minutes = 300 seconds
+                base_delay = 900  # 15 minutes base
+                jitter = random.uniform(-120, 120)  # ±2 minutes jitter
+                # Add small random noise for less predictability
+                noise = random.uniform(-10, 10)
+                total_delay = base_delay + jitter + noise
+                self.shutdown_flag.wait(timeout=total_delay)
         
         self.logger.info("Background thread has finished.")
 
@@ -213,19 +350,63 @@ class TooGoodToGo:
                 await asyncio.sleep(1)
 
     async def graceful_shutdown(self):
+        """Gracefully shut down all components."""
         self.logger.info("Initiating graceful shutdown...")
+        
+        # Set shutdown flag first
         self.shutdown_flag.set()
-        self.thread.join(timeout=10)
-        if self.thread.is_alive():
-            self.logger.warning("Background thread did not terminate within the timeout period.")
-        if not self.message_queue.empty():
-            self.logger.info("Waiting for message queue to be processed...")
-            self.message_queue.join()
-        await self.bot.close()
-        self.db.close()
-        self.logger.info("Graceful shutdown complete.")
+        
+        try:
+            # Wait for background thread with a longer timeout
+            self.logger.info("Waiting for background thread to finish...")
+            self.thread.join(timeout=5)  # Reduced timeout to 5 seconds
+            if self.thread.is_alive():
+                self.logger.warning("Background thread did not terminate within the timeout period.")
+            
+            # Process remaining messages in queue without waiting
+            if not self.message_queue.empty():
+                self.logger.info("Clearing message queue...")
+                while not self.message_queue.empty():
+                    try:
+                        self.message_queue.get_nowait()
+                        self.message_queue.task_done()
+                    except queue.Empty:
+                        break
+            
+            # Close bot and database connections
+            self.logger.info("Closing connections...")
+            try:
+                if hasattr(self.client, 'close') and callable(self.client.close):
+                    await self.client.close()
+                
+                # Close all connected clients
+                for client in self.connected_clients.values():
+                    if hasattr(client, 'close') and callable(client.close):
+                        await client.close()
+            except Exception as e:
+                self.logger.error(f"Error closing TGTG clients: {e}")
+            
+            try:
+                if hasattr(self.bot, 'session') and self.bot.session:
+                    await self.bot.session.close()
+                await self.bot.close()
+            except Exception as e:
+                self.logger.error(f"Error closing bot: {e}")
+            
+            # Close database connection last
+            try:
+                self.logger.info("Closing database connection...")
+                self.db.close()
+            except Exception as e:
+                self.logger.error(f"Error closing database: {e}")
+            
+        except Exception as e:
+            self.logger.error(f"Error during graceful shutdown: {e}")
+        finally:
+            self.logger.info("Graceful shutdown complete.")
 
     async def shutdown(self):
+        """Public method to initiate shutdown."""
         await self.graceful_shutdown()
 
     def is_admin(self, user_id):
@@ -245,17 +426,14 @@ class TooGoodToGo:
     async def check_authorization(self, user_id, chat_id):
         user_id = str(user_id)
         chat_id = str(chat_id)
-        self.logger.info(f"Checking authorization for user {user_id} in chat {chat_id}")
-        if self.is_group_chat(chat_id):
-            self.logger.info(f"Authorized: Group chat {chat_id}")
-            return True
+        self.logger.info(f"Checking authorization for user {user_id}")
         if self.is_admin(user_id):
             self.logger.info(f"Authorized: Admin user {user_id}")
             return True
         if self.is_user_authorized(user_id):
             self.logger.info(f"Authorized: Authorized user {user_id}")
             return True
-        self.logger.info(f"Not authorized: User {user_id} in chat {chat_id}")
+        self.logger.info(f"Not authorized: User {user_id}")
         return False
 
     async def add_to_blacklist(self, user_id, store_id, store_name):
@@ -337,5 +515,5 @@ class TooGoodToGo:
         return self.db.get_all_tokens()
 
     def is_group_chat(self, chat_id):
-        return str(chat_id) == self.group_chat_id
+        return False  # No more group chat functionality
 

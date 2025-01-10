@@ -3,18 +3,16 @@ import configparser
 from telebot import types
 from telebot.async_telebot import AsyncTeleBot
 
-def setup_bot(token, group_chat_id, tooGoodToGo, logger, admin_ids):
+def setup_bot(token, tooGoodToGo, logger, admin_ids):
     bot = AsyncTeleBot(token)
 
     async def check_authorization(obj):
         if isinstance(obj, types.CallbackQuery):
             user_id = str(obj.from_user.id)
-            chat_id = str(obj.message.chat.id)
         else:  # Assume it's a message
             user_id = str(obj.from_user.id)
-            chat_id = str(obj.chat.id)
-        is_authorized = await tooGoodToGo.check_authorization(user_id, chat_id)
-        logger.info(f"Authorization check for user {user_id} in chat {chat_id}: {is_authorized}")
+        is_authorized = await tooGoodToGo.check_authorization(user_id, user_id)
+        logger.info(f"Authorization check for user {user_id}: {is_authorized}")
         return is_authorized
 
     @bot.message_handler(commands=['start'])
