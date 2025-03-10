@@ -5,6 +5,7 @@ from threading import Thread, Event
 from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 from tgtg import TgtgClient
+import tgtg
 from database import Database
 import asyncio
 from queue import Queue
@@ -12,6 +13,11 @@ import queue
 import random
 from tgtg.exceptions import TgtgAPIError
 import os
+
+# Override TGTG user agents with latest version
+tgtg.USER_AGENTS = [
+    "TGTG/25.2.0 Dalvik/2.1.0 (Linux; U; Android 15; sdk_gphone64_x86_64 Build/AE3A.240806.043)",
+]
 
 class TooGoodToGo:
     def __init__(self, bot_token, logger, admin_ids):
@@ -41,6 +47,7 @@ class TooGoodToGo:
         await self.bot.set_my_commands([
             types.BotCommand("/info", "favorite bags that are currently available"),
             types.BotCommand("/login", "log in with your mail"),
+            types.BotCommand("/relogin", "force a new login with your mail"),
             types.BotCommand("/settings", "set when you want to be notified"),
             types.BotCommand("/blacklist", "manage your ignored stores"),
             types.BotCommand("/help", "short explanation"),
@@ -62,16 +69,35 @@ class TooGoodToGo:
         self.users_settings_data[telegram_user_id] = {'sold_out': 0, 'new_stock': 1, 'stock_reduced': 0, 'stock_increased': 0}
         self.db.save_users_settings_data(self.users_settings_data)
 
-    async def new_user(self, telegram_user_id, email):
+    async def new_user(self, telegram_user_id, email, force_relogin=False):
         try:
+            # Check if user exists and not forcing relogin
+            if str(telegram_user_id) in self.users_login_data and not force_relogin:
+                await self.send_message(telegram_user_id, "This chat is already logged in! To re-login, use /relogin")
+                return
+
+            # Remove existing client if any
+            if str(telegram_user_id) in self.connected_clients:
+                del self.connected_clients[str(telegram_user_id)]
+
             client = TgtgClient(email=email)
             credentials = client.get_credentials()
             self.add_user(telegram_user_id, credentials)
             await self.send_message(telegram_user_id, "✅ You are now logged in!")
-            self.logger.info(f"New user added with ID: {telegram_user_id}")
+            self.logger.info(f"{'Re-logged' if force_relogin else 'New'} user added with ID: {telegram_user_id}")
         except Exception as e:
-            self.logger.error(f"Error adding new user: {e}")
+            self.logger.error(f"Error {'re-logging' if force_relogin else 'adding'} user: {e}")
             await self.send_message(telegram_user_id, "❌ An error occurred during login. Please try again later.")
+
+    async def relogin(self, telegram_user_id, email):
+        """Force a re-login for an existing user."""
+        # Remove existing credentials
+        if str(telegram_user_id) in self.users_login_data:
+            del self.users_login_data[str(telegram_user_id)]
+            self.db.save_users_login_data(self.users_login_data)
+        
+        # Perform new login
+        await self.new_user(telegram_user_id, email, force_relogin=True)
 
     def find_credentials_by_telegramUserID(self, user_id):
         return self.users_login_data.get(user_id)
@@ -117,43 +143,61 @@ class TooGoodToGo:
         try:
             if user_id in self.connected_clients:
                 self.client = self.connected_clients[user_id]
-            else:
-                user_credentials = self.find_credentials_by_telegramUserID(user_id)
-                if user_credentials:
-                    self.client = TgtgClient(access_token=user_credentials["access_token"],
-                                             refresh_token=user_credentials["refresh_token"],
-                                             cookie=user_credentials["cookie"])
-                    self.connected_clients[user_id] = self.client
-                else:
-                    raise Exception(f"No credentials found for user ID: {user_id}")
+                return
+                
+            user_credentials = self.find_credentials_by_telegramUserID(user_id)
+            if not user_credentials:
+                raise Exception(f"No credentials found for user ID: {user_id}")
+                
+            # Add longer random delay to avoid rate limiting
+            time.sleep(random.uniform(10, 20))
             
-            # Add random delay
-            time.sleep(random.uniform(5, 10))
+            self.client = TgtgClient(access_token=user_credentials["access_token"],
+                                    refresh_token=user_credentials["refresh_token"],
+                                    cookie=user_credentials["cookie"])
+            self.connected_clients[user_id] = self.client
         
         except Exception as e:
-            # If initial connection fails, try to refresh
-            self.logger.warning(f"Initial connection failed for user {user_id}: {str(e)}")
-            if not self.refresh_credentials(user_id):
-                # If refresh also fails, remove user from processing
-                self.logger.error(f"Could not connect or refresh for user {user_id}")
+            # Only try to refresh if it's an authentication error
+            if "401" in str(e) or "unauthorized" in str(e).lower():
+                self.logger.warning(f"Authentication failed for user {user_id}, attempting refresh: {str(e)}")
+                if not self.refresh_credentials(user_id):
+                    self.logger.error(f"Could not refresh credentials for user {user_id}")
+                    raise
+            else:
+                self.logger.error(f"Connection failed for user {user_id}: {str(e)}")
                 raise
 
     def get_favourite_items(self):
         max_retries = 3
-        base_delay = 5
+        base_delay = 10  # Increased base delay
         
         for attempt in range(max_retries):
             try:
-                return self.client.get_items()
-            except TgtgAPIError as e:
-                if "captcha" in str(e).lower():
-                    delay = base_delay * (2 ** attempt) + random.uniform(1, 5)
-                    self.logger.warning(f"CAPTCHA detected, waiting {delay:.2f} seconds before retry...")
+                # Add random delay between attempts
+                if attempt > 0:
+                    delay = base_delay * (2 ** attempt) + random.uniform(5, 15)
+                    self.logger.warning(f"Retrying get_items after {delay:.2f} seconds...")
                     time.sleep(delay)
+                
+                return self.client.get_items()
+                
+            except TgtgAPIError as e:
+                error_str = str(e).lower()
+                if "captcha" in error_str:
                     if attempt == max_retries - 1:
+                        self.logger.error("Max retries reached for CAPTCHA")
                         raise
-                else:
+                    continue
+                elif "404" in error_str:
+                    self.logger.warning("Got 404 error, likely API endpoint issue")
                     raise
+                else:
+                    self.logger.error(f"TGTG API error: {str(e)}")
+                    raise
+            except Exception as e:
+                self.logger.error(f"Unexpected error in get_favourite_items: {str(e)}")
+                raise
 
     def format_message(self, item, status=None):
         store_name = item['store']['store_name']

@@ -30,7 +30,7 @@ python-socks==2.5.3
 requests==2.32.3
 rich==13.9.4
 setuptools==75.6.0
-tgtg==0.18.1
+tgtg==0.18.2
 urllib3==2.2.3
 wheel==0.45.1
 yarl==1.18.3

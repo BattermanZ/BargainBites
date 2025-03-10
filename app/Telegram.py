@@ -91,6 +91,22 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
                                    text="*⚠️ No valid mail address ⚠️*\nPlease enter */login email@example.com*\n_You will then receive an email with a confirmation link.\nYou do not need to enter a password._",
                                    parse_mode="Markdown")
 
+    @bot.message_handler(commands=['relogin'])
+    async def send_relogin(message):
+        if not await check_authorization(message):
+            return
+        logger.info(f"Received /relogin command in chat {message.chat.id}")
+        email = message.text.replace('/relogin', '').lstrip()
+        logger.info(f"Relogin attempt with email: {email}")
+
+        if re.match(r"[^@]+@[^@]+\.[^@]+", email):
+            await bot.send_message(chat_id=message.chat.id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!* (on your PC or on a phone without the Too Good To Go app)\n_You do not need to enter a password._", parse_mode="markdown")
+            await tooGoodToGo.relogin(str(message.chat.id), email)
+        else:
+            await bot.send_message(chat_id=message.chat.id,
+                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */relogin email@example.com*\n_You will then receive an email with a confirmation link.\nYou do not need to enter a password._",
+                                   parse_mode="Markdown")
+
     def inline_keyboard_markup(chat_id):
         inline_keyboard = types.InlineKeyboardMarkup(
             keyboard=[
