@@ -5,19 +5,13 @@ from threading import Thread, Event
 from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 from tgtg import TgtgClient
-import tgtg
 from database import Database
 import asyncio
 from queue import Queue
 import queue
 import random
-from tgtg.exceptions import TgtgAPIError
+from tgtg.exceptions import TgtgAPIError, TgtgLoginError
 import os
-
-# Override TGTG user agents with latest version
-tgtg.USER_AGENTS = [
-    "TGTG/25.2.0 Dalvik/2.1.0 (Linux; U; Android 15; sdk_gphone64_x86_64 Build/AE3A.240806.043)",
-]
 
 class TooGoodToGo:
     def __init__(self, bot_token, logger, admin_ids):
