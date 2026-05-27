@@ -167,7 +167,5 @@ CREATE TABLE IF NOT EXISTS admin_users
         self._connect()
         user_id_str = str(user_id)
         self._local.cursor.execute('SELECT 1 FROM admin_users WHERE user_id = ?', (user_id_str,))
-        result = bool(self._local.cursor.fetchone())
-        print(f"Database admin check for user {user_id_str}: {result}")  # Add this line for debugging
-        return result
+        return bool(self._local.cursor.fetchone())
 

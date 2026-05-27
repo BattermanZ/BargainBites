@@ -624,6 +624,3 @@ class TooGoodToGo:
     def get_all_tokens(self):
         return self.db.get_all_tokens()
 
-    def is_group_chat(self, chat_id):
-        return False  # No more group chat functionality
-
