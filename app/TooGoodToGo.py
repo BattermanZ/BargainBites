@@ -28,6 +28,7 @@ class TooGoodToGo:
         self.users_settings_data = self.db.get_users_settings_data()
         self.available_items_favorites = self.db.get_available_items_favorites()
         self.connected_clients = {}
+        self.pending_logins = {}  # telegram_user_id (str) -> {"client", "polling_id", "email"}
         self.client = TgtgClient
         self.shutdown_flag = Event()
         self.message_queue = Queue()
@@ -41,6 +42,7 @@ class TooGoodToGo:
         await self.bot.set_my_commands([
             types.BotCommand("/info", "favorite bags that are currently available"),
             types.BotCommand("/login", "log in with your mail"),
+            types.BotCommand("/pin", "complete login with the PIN from your email"),
             types.BotCommand("/relogin", "force a new login with your mail"),
             types.BotCommand("/settings", "set when you want to be notified"),
             types.BotCommand("/blacklist", "manage your ignored stores"),
@@ -57,40 +59,107 @@ class TooGoodToGo:
         keyboard.add(url_button, ignore_button)
         await self.bot.send_message(telegram_user_id, text=message, reply_markup=keyboard, parse_mode="Markdown")
 
+    def message_queue_text(self, telegram_user_id, message):
+        """Thread-safe: enqueue a plain-text message for the async sender."""
+        self.message_queue.put((str(telegram_user_id), message))
+
     def add_user(self, telegram_user_id, credentials):
         self.users_login_data[telegram_user_id] = credentials
         self.db.save_users_login_data(self.users_login_data)
         self.users_settings_data[telegram_user_id] = {'sold_out': 0, 'new_stock': 1, 'stock_reduced': 0, 'stock_increased': 0}
         self.db.save_users_settings_data(self.users_settings_data)
 
+    @staticmethod
+    def _credentials_from_client(client):
+        return {
+            "access_token": client.access_token,
+            "refresh_token": client.refresh_token,
+            "cookie": client.cookie,
+        }
+
     async def new_user(self, telegram_user_id, email, force_relogin=False):
+        telegram_user_id = str(telegram_user_id)
+        if telegram_user_id in self.users_login_data and not force_relogin:
+            await self.send_message(telegram_user_id, "This chat is already logged in! To re-login, use /relogin")
+            return
+        # Run the blocking HTTP call off the event loop.
+        await asyncio.get_event_loop().run_in_executor(
+            None, self._initiate_login, telegram_user_id, email
+        )
+
+    def _initiate_login(self, telegram_user_id, email):
+        """Blocking: POST authByEmail, capture polling_id, stash client. Runs in executor/thread."""
+        from tgtg import AUTH_BY_EMAIL_ENDPOINT
         try:
-            # Check if user exists and not forcing relogin
-            if str(telegram_user_id) in self.users_login_data and not force_relogin:
-                await self.send_message(telegram_user_id, "This chat is already logged in! To re-login, use /relogin")
-                return
-
-            # Remove existing client if any
-            if str(telegram_user_id) in self.connected_clients:
-                del self.connected_clients[str(telegram_user_id)]
-
             client = TgtgClient(email=email)
-            credentials = client.get_credentials()
-            self.add_user(telegram_user_id, credentials)
-            await self.send_message(telegram_user_id, "✅ You are now logged in!")
-            self.logger.info(f"{'Re-logged' if force_relogin else 'New'} user added with ID: {telegram_user_id}")
+            response = client._post(
+                client._get_url(AUTH_BY_EMAIL_ENDPOINT),
+                json={"device_type": client.device_type, "email": client.email},
+            )
+            if response.status_code != 200:
+                raise TgtgLoginError(response.status_code, response.content)
+
+            login_resp = response.json()
+            state = login_resp.get("state")
+            if state == "WAIT":
+                self.pending_logins[telegram_user_id] = {
+                    "client": client,
+                    "polling_id": login_resp["polling_id"],
+                    "email": email,
+                }
+                self.logger.info(f"Login initiated for {telegram_user_id} - waiting for PIN")
+                self.message_queue_text(
+                    telegram_user_id,
+                    "📩 Check your email for a *login PIN code* from Too Good To Go.\n\n"
+                    "Then send it here:\n`/pin 12345`",
+                )
+            elif state == "TERMS":
+                self.message_queue_text(
+                    telegram_user_id,
+                    "❌ This email is not linked to a TGTG account. Please sign up in the TGTG app first.",
+                )
+            else:
+                self.message_queue_text(telegram_user_id, f"❌ Unexpected login state: {state}")
+        except TgtgAPIError as e:
+            self.logger.error(f"Login rate-limited for {telegram_user_id}: {e}")
+            self.message_queue_text(telegram_user_id, "❌ Too many requests. Please try again later.")
+        except TgtgLoginError as e:
+            self.logger.warning(f"Login blocked/failed for {telegram_user_id}: {e}")
+            self.message_queue_text(
+                telegram_user_id,
+                "🔒 *Login blocked by TGTG (anti-bot).* Try again later, or from a different network.",
+            )
         except Exception as e:
-            self.logger.error(f"Error {'re-logging' if force_relogin else 'adding'} user: {e}")
-            await self.send_message(telegram_user_id, "❌ An error occurred during login. Please try again later.")
+            self.logger.error(f"Unexpected error initiating login for {telegram_user_id}: {e}")
+            self.message_queue_text(telegram_user_id, "❌ An error occurred during login. Please try again later.")
+
+    def complete_login_with_pin(self, telegram_user_id, pin):
+        """Blocking: finish a pending login with the emailed PIN. Runs in executor/thread."""
+        telegram_user_id = str(telegram_user_id)
+        pending = self.pending_logins.pop(telegram_user_id, None)
+        if not pending:
+            self.message_queue_text(telegram_user_id, "⚠️ No pending login. Start with `/login email@example.com` first.")
+            return
+        try:
+            client = pending["client"]
+            client._auth_by_pin(pending["polling_id"], pin)
+            credentials = self._credentials_from_client(client)
+            self.add_user(telegram_user_id, credentials)
+            self.logger.info(f"Login completed for {telegram_user_id}")
+            self.message_queue_text(telegram_user_id, "✅ You are now logged in!")
+        except TgtgLoginError as e:
+            self.logger.error(f"PIN auth failed for {telegram_user_id}: {e}")
+            self.pending_logins[telegram_user_id] = pending  # allow retry
+            self.message_queue_text(telegram_user_id, "❌ Invalid or expired PIN. Check your email and resend `/pin 12345`.")
+        except Exception as e:
+            self.logger.error(f"Error completing login for {telegram_user_id}: {e}")
+            self.message_queue_text(telegram_user_id, "❌ Login failed. Please try `/login` again.")
 
     async def relogin(self, telegram_user_id, email):
-        """Force a re-login for an existing user."""
-        # Remove existing credentials
-        if str(telegram_user_id) in self.users_login_data:
-            del self.users_login_data[str(telegram_user_id)]
+        telegram_user_id = str(telegram_user_id)
+        if telegram_user_id in self.users_login_data:
+            del self.users_login_data[telegram_user_id]
             self.db.save_users_login_data(self.users_login_data)
-        
-        # Perform new login
         await self.new_user(telegram_user_id, email, force_relogin=True)
 
     def find_credentials_by_telegramUserID(self, user_id):
@@ -371,11 +440,16 @@ class TooGoodToGo:
     async def process_message_queue(self):
         while not self.shutdown_flag.is_set():
             try:
-                key, message, item_id, store_id, store_name = await asyncio.get_event_loop().run_in_executor(
+                payload = await asyncio.get_event_loop().run_in_executor(
                     None, self.message_queue.get, True, 1.0
                 )
                 try:
-                    await self.send_message_with_link(key, message, item_id, store_id, store_name)
+                    if len(payload) == 2:
+                        key, message = payload
+                        await self.send_message(key, message)
+                    else:
+                        key, message, item_id, store_id, store_name = payload
+                        await self.send_message_with_link(key, message, item_id, store_id, store_name)
                     self.logger.info(f"Message sent to user {key}")
                 except Exception as e:
                     self.logger.error(f"Error sending message: {e}")

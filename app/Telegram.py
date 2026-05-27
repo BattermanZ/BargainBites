@@ -42,10 +42,9 @@ def setup_bot(token, tooGoodToGo, logger, admin_ids):
 The bot will notify this group as soon as new bags from the favorites are available.
 
 *❗️️This is necessary if you want to use the bot❗️*
-🔑 To login into the TooGoodToGo account for this group, enter 
+🔑 To login, enter
 */login email@example.com*
-_You will then receive an email with a confirmation link.
-You do not need to enter a password._
+_You'll receive an email with a PIN code. Then send_ */pin 12345* _to finish. No password needed._
 
 ⚙️ With */settings* you can set when the group wants to be notified. 
 
@@ -84,7 +83,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
         logger.info(f"Login attempt with email: {email}")
 
         if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=message.chat.id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!* (on your PC or on a phone without the Too Good To Go app)\n_You do not need to enter a password._", parse_mode="markdown")
+            await bot.send_message(chat_id=message.chat.id, text="📩 You'll receive an email with a *PIN code* from Too Good To Go.\nReply here with `/pin 12345` to finish logging in.", parse_mode="Markdown")
             await tooGoodToGo.new_user(str(message.chat.id), email)
         else:
             await bot.send_message(chat_id=message.chat.id,
@@ -100,12 +99,25 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
         logger.info(f"Relogin attempt with email: {email}")
 
         if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=message.chat.id, text="📩 Please open your mail account\nYou will then receive an email with a confirmation link.\n*You must open the link in your browser!* (on your PC or on a phone without the Too Good To Go app)\n_You do not need to enter a password._", parse_mode="markdown")
+            await bot.send_message(chat_id=message.chat.id, text="📩 You'll receive an email with a *PIN code* from Too Good To Go.\nReply here with `/pin 12345` to finish logging in.", parse_mode="Markdown")
             await tooGoodToGo.relogin(str(message.chat.id), email)
         else:
             await bot.send_message(chat_id=message.chat.id,
                                    text="*⚠️ No valid mail address ⚠️*\nPlease enter */relogin email@example.com*\n_You will then receive an email with a confirmation link.\nYou do not need to enter a password._",
                                    parse_mode="Markdown")
+
+    @bot.message_handler(commands=['pin'])
+    async def send_pin(message):
+        if not await check_authorization(message):
+            return
+        chat_id = str(message.chat.id)
+        pin = message.text.replace('/pin', '').strip()
+        if not pin:
+            await bot.send_message(chat_id=message.chat.id, text="⚠️ Please provide the PIN from your email:\n`/pin 12345`", parse_mode="Markdown")
+            return
+        await bot.send_message(chat_id=message.chat.id, text="⏳ Verifying PIN...")
+        import asyncio
+        asyncio.get_event_loop().run_in_executor(None, tooGoodToGo.complete_login_with_pin, chat_id, pin)
 
     def inline_keyboard_markup(chat_id):
         inline_keyboard = types.InlineKeyboardMarkup(
