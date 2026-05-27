@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS admin_users
 
     def save_available_items_favorites(self, data):
         self._connect()
+        # Replace the whole table so pruned/stale item ids are actually removed,
+        # not just left behind by an upsert.
+        self._local.cursor.execute('DELETE FROM available_items_favorites')
         for item_id, item_data in data.items():
             self._local.cursor.execute('INSERT OR REPLACE INTO available_items_favorites VALUES (?, ?)',
                                 (item_id, json.dumps(item_data)))
