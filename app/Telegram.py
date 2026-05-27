@@ -87,7 +87,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
             await tooGoodToGo.new_user(str(message.chat.id), email)
         else:
             await bot.send_message(chat_id=message.chat.id,
-                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */login email@example.com*\n_You will then receive an email with a confirmation link.\nYou do not need to enter a password._",
+                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */login email@example.com*\n_You'll receive an email with a PIN code. Then send_ */pin 12345* _to finish. No password needed._",
                                    parse_mode="Markdown")
 
     @bot.message_handler(commands=['relogin'])
@@ -103,7 +103,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
             await tooGoodToGo.relogin(str(message.chat.id), email)
         else:
             await bot.send_message(chat_id=message.chat.id,
-                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */relogin email@example.com*\n_You will then receive an email with a confirmation link.\nYou do not need to enter a password._",
+                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */relogin email@example.com*\n_You'll receive an email with a PIN code. Then send_ */pin 12345* _to finish. No password needed._",
                                    parse_mode="Markdown")
 
     @bot.message_handler(commands=['pin'])
