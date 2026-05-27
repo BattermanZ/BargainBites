@@ -83,7 +83,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
         logger.info(f"Login attempt with email: {email}")
 
         if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=message.chat.id, text="📩 You'll receive an email with a *PIN code* from Too Good To Go.\nReply here with `/pin 12345` to finish logging in.", parse_mode="Markdown")
+            await bot.send_message(chat_id=message.chat.id, text="⏳ Requesting login...")
             await tooGoodToGo.new_user(str(message.chat.id), email)
         else:
             await bot.send_message(chat_id=message.chat.id,
@@ -99,7 +99,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
         logger.info(f"Relogin attempt with email: {email}")
 
         if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=message.chat.id, text="📩 You'll receive an email with a *PIN code* from Too Good To Go.\nReply here with `/pin 12345` to finish logging in.", parse_mode="Markdown")
+            await bot.send_message(chat_id=message.chat.id, text="⏳ Requesting login...")
             await tooGoodToGo.relogin(str(message.chat.id), email)
         else:
             await bot.send_message(chat_id=message.chat.id,
