@@ -313,6 +313,10 @@ class TooGoodToGo:
             return False
         return any(settings.get(k, 0) for k in TooGoodToGo.NOTIFICATION_TYPES)
 
+    @staticmethod
+    def _prune_seen_items(seen, active_ids):
+        return {item_id: data for item_id, data in seen.items() if item_id in active_ids}
+
     def get_available_items_per_user(self):
         consecutive_errors = 0
         max_consecutive_errors = 5
@@ -325,7 +329,8 @@ class TooGoodToGo:
                 users_login_data = self.db.get_users_login_data()
                 available_items_favorites = self.db.get_available_items_favorites()
                 temp_available_items = {}
-                
+                active_item_ids = set()
+
                 # Only poll users who actually want at least one notification type.
                 user_keys = [
                     uid for uid in users_login_data
@@ -352,7 +357,8 @@ class TooGoodToGo:
                             status = None
                             item_id = item['item']['item_id']
                             store_id = item['store']['store_id']
-                            
+                            active_item_ids.add(item_id)
+
                             # Skip blacklisted stores
                             if self.db.is_store_blacklisted(key, store_id):
                                 continue
@@ -405,7 +411,9 @@ class TooGoodToGo:
                             break
                         continue
                 
-                # Save updated available items
+                # Prune stale entries and save updated available items
+                if active_item_ids:
+                    available_items_favorites = self._prune_seen_items(available_items_favorites, active_item_ids)
                 self.db.save_available_items_favorites(available_items_favorites)
             
             except Exception as err:

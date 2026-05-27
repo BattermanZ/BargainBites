@@ -40,3 +40,10 @@ def test_format_message_handles_missing_optional_fields():
     assert item_id == "i1" and store_id == "s1" and store_name == "Bakery"
     assert "€4.99" in message and "3 bags available" in message
     assert message.startswith("*NEW BAGS AVAILABLE*")
+
+
+def test_prune_seen_items_keeps_only_active():
+    import TooGoodToGo
+    seen = {"a": {"items_available": 1}, "b": {"items_available": 0}, "c": {"items_available": 2}}
+    pruned = TooGoodToGo.TooGoodToGo._prune_seen_items(seen, active_ids={"a", "c"})
+    assert set(pruned.keys()) == {"a", "c"}
