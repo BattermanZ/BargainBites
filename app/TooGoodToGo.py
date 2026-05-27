@@ -244,35 +244,42 @@ class TooGoodToGo:
                 raise
         raise Exception(f"get_favourite_items exhausted retries for {user_id}")
 
-    def format_message(self, item, status=None):
-        store_name = item['store']['store_name']
-        address = item['store']['store_location']['address']['address_line']
-        price = item['item']["price_including_taxes"]["minor_units"] / 100
-        items_available = item['items_available']
-        item_id = item['item']['item_id']
-        store_id = item['store']['store_id']
+    @staticmethod
+    def format_message(item, status=None):
+        store = item.get('store', {})
+        store_name = store.get('store_name', 'Unknown store')
+        store_id = store.get('store_id', '')
+        address = store.get('store_location', {}).get('address', {}).get('address_line', '')
+        inner = item.get('item', {})
+        item_id = inner.get('item_id', '')
+        minor_units = inner.get('price_including_taxes', {}).get('minor_units', 0)
+        price = minor_units / 100
+        items_available = item.get('items_available', 0)
 
         pickup_time = ""
-        if 'pickup_interval' in item:
-            start_time = datetime.strptime(item['pickup_interval']['start'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
-            end_time = datetime.strptime(item['pickup_interval']['end'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).astimezone()
-            today = date.today()
-            tomorrow = today + timedelta(days=1)
-            if start_time.date() == today:
-                day_str = "Today"
-            elif start_time.date() == tomorrow:
-                day_str = "Tomorrow"
-            else:
-                day_str = start_time.strftime("%A")
-            pickup_time = f"⏰ {day_str} {start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')} ({start_time.strftime('%A')})"
+        interval = item.get('pickup_interval')
+        if interval and interval.get('start') and interval.get('end'):
+            try:
+                start_time = datetime.strptime(interval['start'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
+                end_time = datetime.strptime(interval['end'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).astimezone()
+                today = date.today()
+                tomorrow = today + timedelta(days=1)
+                if start_time.date() == today:
+                    day_str = "Today"
+                elif start_time.date() == tomorrow:
+                    day_str = "Tomorrow"
+                else:
+                    day_str = start_time.strftime("%A")
+                pickup_time = f"⏰ {day_str} {start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')} ({start_time.strftime('%A')})"
+            except (ValueError, KeyError):
+                pickup_time = ""
 
         status_headers = {
             'new_stock': '*NEW BAGS AVAILABLE* 🛍️\n\n',
             'sold_out': '*SOLD-OUT* 🥺\n\n',
             'stock_increased': '*STOCK INCREASED* 📈\n\n',
-            'stock_reduced': '*STOCK REDUCED* 📉\n\n'
+            'stock_reduced': '*STOCK REDUCED* 📉\n\n',
         }
-
         message = status_headers.get(status, '')
         message += f"🏪 *{store_name}*\n"
         message += f"📍 {address}\n"
@@ -280,7 +287,6 @@ class TooGoodToGo:
         message += f"🥡 {items_available} bags available\n"
         if pickup_time:
             message += f"{pickup_time}\n"
-        
         return message, item_id, store_id, store_name
 
     async def send_available_favourite_items_for_one_user(self, user_id):
