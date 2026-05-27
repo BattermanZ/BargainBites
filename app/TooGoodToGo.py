@@ -388,15 +388,15 @@ class TooGoodToGo:
                                     self.message_queue.put((key, message, item_id, store_id, store_name))
                     
                     except Exception as e:
-                        # Log individual user processing errors
-                        self.logger.error(f"Error processing user {key}: {str(e)}")
+                        err_str = str(e).lower()
+                        if "captcha" in err_str:
+                            self.logger.warning(f"Captcha/Datadome block while polling user {key}; backing off 5 minutes.")
+                            self.shutdown_flag.wait(timeout=5 * 60)
+                        self.logger.error(f"Error processing user {key}: {e}")
                         consecutive_errors += 1
-                        
-                        # If too many consecutive errors, pause processing
                         if consecutive_errors >= max_consecutive_errors:
                             self.logger.critical(f"Reached max consecutive errors ({max_consecutive_errors}). Pausing processing.")
                             break
-                        
                         continue
                 
                 # Save updated available items
