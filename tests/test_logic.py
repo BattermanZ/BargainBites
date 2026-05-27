@@ -52,7 +52,7 @@ def test_prune_seen_items_keeps_only_active():
 import asyncio
 import logging
 from queue import Queue
-from threading import Event
+from threading import Event, Lock
 
 
 def _bare_instance():
@@ -61,6 +61,8 @@ def _bare_instance():
     inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)
     inst.logger = logging.getLogger("test")
     inst.message_queue = Queue()
+    inst.connected_clients = {}
+    inst._client_lock = Lock()
     return inst
 
 
@@ -142,9 +144,11 @@ def test_complete_login_with_pin_success_saves_credentials():
         def _auth_by_pin(self, polling_id, pin):
             pass
 
-    inst.pending_logins = {"u1": {"client": OkClient(), "polling_id": "pid", "email": "x@y.z"}}
+    client = OkClient()
+    inst.pending_logins = {"u1": {"client": client, "polling_id": "pid", "email": "x@y.z"}}
     inst.complete_login_with_pin("u1", "11111")
     assert inst.users_login_data["u1"] == {"access_token": "AT", "refresh_token": "RT", "cookie": "ck"}
     assert "u1" not in inst.pending_logins
+    assert inst.connected_clients["u1"] is client  # reused for a fast first /info
     payload = inst.message_queue.get_nowait()
     assert "logged in" in payload[1].lower()

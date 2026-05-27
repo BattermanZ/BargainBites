@@ -145,6 +145,10 @@ class TooGoodToGo:
             client._auth_by_pin(pending["polling_id"], pin)
             credentials = self._credentials_from_client(client)
             self.add_user(telegram_user_id, credentials)
+            # Reuse the just-authenticated client so the first /info doesn't
+            # pay the cold-connect tax (rebuild + rate-limit sleep).
+            with self._client_lock:
+                self.connected_clients[telegram_user_id] = client
             self.logger.info(f"Login completed for {telegram_user_id}")
             self.message_queue_text(telegram_user_id, "✅ You are now logged in!")
         except TgtgLoginError as e:
@@ -165,8 +169,12 @@ class TooGoodToGo:
     def find_credentials_by_telegramUserID(self, user_id):
         return self.users_login_data.get(user_id)
 
-    def _build_client(self, user_id):
-        """Build (or reuse) a per-user TGTG client. Thread-safe. Returns a client or raises."""
+    def _build_client(self, user_id, cold_connect_delay=True):
+        """Build (or reuse) a per-user TGTG client. Thread-safe. Returns a client or raises.
+
+        cold_connect_delay adds a rate-limit cushion before a fresh build; the
+        background poll loop keeps it, interactive paths (e.g. /info) skip it.
+        """
         with self._client_lock:
             cached = self.connected_clients.get(user_id)
         if cached is not None:
@@ -174,7 +182,8 @@ class TooGoodToGo:
         creds = self.find_credentials_by_telegramUserID(user_id)
         if not creds:
             raise Exception(f"No credentials found for user ID: {user_id}")
-        time.sleep(random.uniform(10, 20))  # rate-limit cushion on cold connect
+        if cold_connect_delay:
+            time.sleep(random.uniform(10, 20))  # rate-limit cushion on cold connect
         client = TgtgClient(
             access_token=creds["access_token"],
             refresh_token=creds["refresh_token"],
@@ -291,7 +300,7 @@ class TooGoodToGo:
 
     async def send_available_favourite_items_for_one_user(self, user_id):
         try:
-            client = self._build_client(user_id)
+            client = self._build_client(user_id, cold_connect_delay=False)
             favourite_items = self.get_favourite_items(user_id, client)
             available_items = [item for item in favourite_items if item['items_available'] > 0 and not self.db.is_store_blacklisted(user_id, item['store']['store_id'])]
             if not available_items:
