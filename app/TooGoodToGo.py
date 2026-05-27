@@ -299,6 +299,14 @@ class TooGoodToGo:
             self.logger.error(f"Error sending available items: {e}")
             await self.send_message(user_id, "❌ An error occurred while fetching available items. Please try again later.")
 
+    NOTIFICATION_TYPES = ("sold_out", "new_stock", "stock_reduced", "stock_increased")
+
+    @staticmethod
+    def _user_needs_notifications(settings):
+        if not settings:
+            return False
+        return any(settings.get(k, 0) for k in TooGoodToGo.NOTIFICATION_TYPES)
+
     def get_available_items_per_user(self):
         consecutive_errors = 0
         max_consecutive_errors = 5
@@ -312,8 +320,13 @@ class TooGoodToGo:
                 available_items_favorites = self.db.get_available_items_favorites()
                 temp_available_items = {}
                 
-                # Shuffle users to distribute load and reduce predictability
-                user_keys = list(users_login_data.keys())
+                # Only poll users who actually want at least one notification type.
+                user_keys = [
+                    uid for uid in users_login_data
+                    if self._user_needs_notifications(self.db.get_user_settings(uid))
+                ]
+                if not user_keys:
+                    self.logger.info("No users with active notifications - skipping API poll this cycle.")
                 random.shuffle(user_keys)
                 
                 for key in user_keys:
