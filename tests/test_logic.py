@@ -199,3 +199,29 @@ def test_should_skip_user_with_recent_empty_favourites():
     assert T._should_skip_empty_user(last_count=0, cycles_since_probe=3) is False
     assert T._should_skip_empty_user(last_count=5, cycles_since_probe=0) is False
     assert T._should_skip_empty_user(last_count=None, cycles_since_probe=0) is False
+
+
+def test_persist_cookie_if_changed_writes_only_on_change():
+    inst = _bare_instance()
+    saved = []
+
+    class FakeDB:
+        def save_users_login_data(self, data):
+            saved.append({k: dict(v) for k, v in data.items()})
+
+    inst.db = FakeDB()
+    inst.users_login_data = {"u1": {"access_token": "AT", "refresh_token": "RT", "cookie": "old"}}
+
+    class FakeClient:
+        access_token = "AT"
+        refresh_token = "RT"
+        cookie = "old"  # unchanged
+
+    inst._persist_cookie_if_changed("u1", FakeClient())
+    assert saved == []  # nothing written
+
+    FakeClient.cookie = "new"
+    inst._persist_cookie_if_changed("u1", FakeClient())
+    assert len(saved) == 1
+    assert saved[0]["u1"]["cookie"] == "new"
+    assert inst.users_login_data["u1"]["cookie"] == "new"

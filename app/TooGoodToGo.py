@@ -219,6 +219,26 @@ class TooGoodToGo:
                 self.connected_clients.pop(user_id, None)
             return None
 
+    def _persist_cookie_if_changed(self, user_id, client):
+        """If the client's Datadome cookie differs from what we have stored,
+        write it back. Token fields may also rotate — persist the whole creds."""
+        stored = self.users_login_data.get(user_id)
+        if not stored:
+            return
+        new_cookie = getattr(client, "cookie", None)
+        new_access = getattr(client, "access_token", None)
+        new_refresh = getattr(client, "refresh_token", None)
+        if (new_cookie == stored.get("cookie")
+                and new_access == stored.get("access_token")
+                and new_refresh == stored.get("refresh_token")):
+            return
+        self.users_login_data[user_id] = {
+            "access_token": new_access,
+            "refresh_token": new_refresh,
+            "cookie": new_cookie,
+        }
+        self.db.save_users_login_data({user_id: self.users_login_data[user_id]})
+
     def get_favourite_items(self, user_id, client):
         """Fetch favourites for a specific user/client, with retry, captcha and 401 handling."""
         max_retries = 3
@@ -410,6 +430,7 @@ class TooGoodToGo:
                         available_items = self.get_favourite_items(key, client)
                         self.db.set_favourite_count_state(key, len(available_items), 0)
                         consecutive_errors = 0
+                        self._persist_cookie_if_changed(key, client)
 
                         # Process each available item
                         for item in available_items:
