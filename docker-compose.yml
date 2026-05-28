@@ -1,8 +1,9 @@
 services:
   bargainbites:
-    image: registry.batterlan.cc/bargainbitesbot:v2.0.0
+    image: registry.batterlan.cc/bargainbites:v2.0.0
     container_name: bargainbites
     restart: unless-stopped
+    user: "65532:65532"
     env_file: .env
     volumes:
       - ./db:/app/database

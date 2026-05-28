@@ -17,7 +17,7 @@
 - "Datadome cookie" lives on `TgtgClient.cookie` after a successful request. The library may rotate it after a 403 → cookie clear → re-fetch. Today we only persist `cookie` at login; we never write back a refreshed value during a polling cycle.
 - The background polling thread runs in a separate `threading.Thread`. Any shared state must be guarded by an existing lock or a new one; `connected_clients` already uses `self._client_lock`.
 - Tests use a `_bare_instance()` helper (see `tests/test_logic.py:58`) that skips `__init__` to avoid spinning threads. New tests should reuse it.
-- Run tests with: `cd /home/battermanz/coding/bargainbitesbot && python -m pytest tests/ -v`
+- Run tests with: `cd /home/battermanz/coding/bargainbites && python -m pytest tests/ -v`
 
 ## File structure (final state after this plan)
 

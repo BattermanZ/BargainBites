@@ -2,7 +2,6 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 import asyncio
-from dotenv import load_dotenv
 from Telegram import setup_bot
 from TooGoodToGo import TooGoodToGo
 import signal
@@ -12,15 +11,6 @@ __version__ = "2.0.0"
 # Get the project root directory (one level up from app directory)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Load environment variables from project root
-env_path = os.path.join(PROJECT_ROOT, '.env')
-if not os.path.exists(env_path):
-    raise FileNotFoundError(
-        f".env file not found at: {env_path}\n"
-        f"Please copy .env.template to .env and fill in your values."
-    )
-load_dotenv(env_path)
 
 # Setup logging in project root
 logs_dir = os.path.join(PROJECT_ROOT, 'logs')
