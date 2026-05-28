@@ -315,8 +315,11 @@ class TooGoodToGo:
             await self.send_message(user_id, "❌ An error occurred while fetching available items. Please try again later.")
 
     NOTIFICATION_TYPES = ("sold_out", "new_stock", "stock_reduced", "stock_increased")
-    DAY_LOOP_MIN_SECONDS = 300   # 5 min
-    DAY_LOOP_MAX_SECONDS = 480   # 8 min
+    DAY_LOOP_MIN_SECONDS = 300    # 5 min
+    DAY_LOOP_MAX_SECONDS = 480    # 8 min
+    NIGHT_LOOP_MIN_SECONDS = 2700  # 45 min
+    NIGHT_LOOP_MAX_SECONDS = 5400  # 90 min
+    NIGHT_HOURS = (1, 2, 3, 4, 5, 6)
 
     @staticmethod
     def _user_needs_notifications(settings):
@@ -326,9 +329,11 @@ class TooGoodToGo:
 
     @staticmethod
     def _compute_loop_delay(hour=None):
-        """Return a randomized loop delay in seconds. `hour` is local hour 0-23.
-        Night mode (01:00–06:59 local) is applied in a later task; for now the
-        result is day-mode regardless of `hour`."""
+        """Return a randomized loop delay in seconds, with night-mode stretch
+        applied between 01:00 and 06:59 local (`hour` in 1..6)."""
+        if hour in TooGoodToGo.NIGHT_HOURS:
+            return random.uniform(TooGoodToGo.NIGHT_LOOP_MIN_SECONDS,
+                                  TooGoodToGo.NIGHT_LOOP_MAX_SECONDS)
         base = random.uniform(TooGoodToGo.DAY_LOOP_MIN_SECONDS,
                               TooGoodToGo.DAY_LOOP_MAX_SECONDS)
         noise = random.uniform(-10, 10)

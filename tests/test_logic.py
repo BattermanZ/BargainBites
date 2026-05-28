@@ -160,3 +160,18 @@ def test_compute_loop_delay_in_day_range():
     for _ in range(50):
         delay = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=14)
         assert 280 <= delay <= 500, delay
+
+
+def test_compute_loop_delay_in_night_range():
+    import TooGoodToGo
+    # Night mode: 45–90 minutes (2700–5400 s) for hours 1..6 inclusive
+    for h in (1, 3, 6):
+        for _ in range(20):
+            d = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=h)
+            assert 2700 <= d <= 5400, (h, d)
+
+def test_compute_loop_delay_boundary_hours_use_day_mode():
+    import TooGoodToGo
+    for h in (0, 7, 23):
+        d = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=h)
+        assert d <= 500
