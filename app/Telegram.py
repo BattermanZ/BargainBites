@@ -259,7 +259,12 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
         if not await check_authorization(message):
             return
         token = tooGoodToGo.db.generate_token()
-        await bot.reply_to(message, f"New token generated: {token}")
+        await bot.reply_to(
+            message,
+            "New invite token generated. Forward the next message to the new user — "
+            "they just need to send it to the bot to gain access.",
+        )
+        await bot.send_message(message.chat.id, f"/authorize {token}")
         logger.info(f"Admin {message.from_user.id} generated a new token")
 
     @bot.message_handler(commands=['list_tokens'])

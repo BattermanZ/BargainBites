@@ -40,7 +40,7 @@ class TooGoodToGo:
         self.logger.info(f"TooGoodToGo initialized with admin IDs: {self.admin_ids}")
 
     async def set_bot_commands(self):
-        await self.bot.set_my_commands([
+        default_commands = [
             types.BotCommand("/info", "favorite bags that are currently available"),
             types.BotCommand("/login", "log in with your mail"),
             types.BotCommand("/pin", "complete login with the PIN from your email"),
@@ -48,7 +48,20 @@ class TooGoodToGo:
             types.BotCommand("/settings", "set when you want to be notified"),
             types.BotCommand("/blacklist", "manage your ignored stores"),
             types.BotCommand("/help", "short explanation"),
-        ])
+        ]
+        await self.bot.set_my_commands(default_commands)
+        admin_commands = default_commands + [
+            types.BotCommand("/generate_token", "[admin] create a new invite token"),
+            types.BotCommand("/list_tokens", "[admin] list all invite tokens"),
+        ]
+        for admin_id in self.admin_ids:
+            try:
+                await self.bot.set_my_commands(
+                    admin_commands,
+                    scope=types.BotCommandScopeChat(chat_id=int(admin_id)),
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to set admin commands for {admin_id}: {e}")
 
     async def send_message(self, telegram_user_id, message):
         await self.bot.send_message(telegram_user_id, text=message, parse_mode="Markdown")
