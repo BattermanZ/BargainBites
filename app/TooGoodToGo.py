@@ -253,6 +253,7 @@ class TooGoodToGo:
             except TgtgAPIError as e:
                 error_str = str(e).lower()
                 if "401" in error_str or "unauthorized" in error_str:
+                    self.db.increment_metric("http_401", day=date.today().isoformat())
                     self.logger.warning(f"401 for user {user_id}; attempting credential refresh")
                     refreshed = self.refresh_credentials(user_id)
                     if refreshed is None:
@@ -511,6 +512,7 @@ class TooGoodToGo:
                         err_str = str(e).lower()
                         if "captcha" in err_str:
                             self._set_user_cooldown(key)
+                            self.db.increment_metric("captcha", day=date.today().isoformat())
                             self.logger.warning(
                                 f"Captcha/Datadome for user {key}; per-user cooldown set "
                                 f"until {datetime.fromtimestamp(self._user_cooldowns[key]).isoformat(timespec='seconds')}."

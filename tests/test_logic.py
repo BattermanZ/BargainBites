@@ -236,3 +236,16 @@ def test_should_refresh_access_token_by_age():
     assert T._should_refresh_access_token(now, fresh) is False
     assert T._should_refresh_access_token(now, stale) is True
     assert T._should_refresh_access_token(now, None) is False
+
+
+def test_metrics_increment_and_get(tmp_path):
+    from database import Database
+    db_file = tmp_path / "metrics.db"
+    db = Database(str(db_file))
+    db.increment_metric("captcha", day="2026-05-28")
+    db.increment_metric("captcha", day="2026-05-28")
+    db.increment_metric("http_401", day="2026-05-28")
+    assert db.get_metric("captcha", day="2026-05-28") == 2
+    assert db.get_metric("http_401", day="2026-05-28") == 1
+    assert db.get_metric("captcha", day="2026-05-27") == 0
+    db.close()

@@ -199,3 +199,28 @@ CREATE TABLE IF NOT EXISTS admin_users
             'INSERT OR REPLACE INTO user_favourite_counts VALUES (?, ?, ?)',
             (user_id, int(last_count), int(cycles_since_probe)))
         self._local.conn.commit()
+
+    def _ensure_poller_metrics_table(self):
+        self._connect()
+        self._local.cursor.execute('''
+        CREATE TABLE IF NOT EXISTS poller_metrics
+        (day TEXT, metric TEXT, value INTEGER DEFAULT 0,
+         PRIMARY KEY (day, metric))
+        ''')
+        self._local.conn.commit()
+
+    def increment_metric(self, metric, day):
+        self._ensure_poller_metrics_table()
+        self._local.cursor.execute(
+            'INSERT INTO poller_metrics(day, metric, value) VALUES (?, ?, 1) '
+            'ON CONFLICT(day, metric) DO UPDATE SET value = value + 1',
+            (day, metric))
+        self._local.conn.commit()
+
+    def get_metric(self, metric, day):
+        self._ensure_poller_metrics_table()
+        self._local.cursor.execute(
+            'SELECT value FROM poller_metrics WHERE day = ? AND metric = ?',
+            (day, metric))
+        row = self._local.cursor.fetchone()
+        return int(row[0]) if row else 0
