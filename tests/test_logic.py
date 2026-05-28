@@ -152,3 +152,11 @@ def test_complete_login_with_pin_success_saves_credentials():
     assert inst.connected_clients["u1"] is client  # reused for a fast first /info
     payload = inst.message_queue.get_nowait()
     assert "logged in" in payload[1].lower()
+
+
+def test_compute_loop_delay_in_day_range():
+    import TooGoodToGo
+    # Day mode: 5–8 minutes (300–480 s) plus small noise (~±10s)
+    for _ in range(50):
+        delay = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=14)
+        assert 280 <= delay <= 500, delay

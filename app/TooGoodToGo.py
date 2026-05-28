@@ -315,12 +315,24 @@ class TooGoodToGo:
             await self.send_message(user_id, "❌ An error occurred while fetching available items. Please try again later.")
 
     NOTIFICATION_TYPES = ("sold_out", "new_stock", "stock_reduced", "stock_increased")
+    DAY_LOOP_MIN_SECONDS = 300   # 5 min
+    DAY_LOOP_MAX_SECONDS = 480   # 8 min
 
     @staticmethod
     def _user_needs_notifications(settings):
         if not settings:
             return False
         return any(settings.get(k, 0) for k in TooGoodToGo.NOTIFICATION_TYPES)
+
+    @staticmethod
+    def _compute_loop_delay(hour=None):
+        """Return a randomized loop delay in seconds. `hour` is local hour 0-23.
+        Night mode (01:00–06:59 local) is applied in a later task; for now the
+        result is day-mode regardless of `hour`."""
+        base = random.uniform(TooGoodToGo.DAY_LOOP_MIN_SECONDS,
+                              TooGoodToGo.DAY_LOOP_MAX_SECONDS)
+        noise = random.uniform(-10, 10)
+        return base + noise
 
     @staticmethod
     def _prune_seen_items(seen, active_ids):
@@ -436,13 +448,8 @@ class TooGoodToGo:
                     time.sleep(3600)  # 1-hour pause
                     consecutive_errors = 0
             
-            # Add random jitter to the main loop delay (between 13 and 17 minutes)
             if not self.shutdown_flag.is_set():
-                base_delay = 900  # 15 minutes base
-                jitter = random.uniform(-120, 120)  # ±2 minutes jitter
-                # Add small random noise for less predictability
-                noise = random.uniform(-10, 10)
-                total_delay = base_delay + jitter + noise
+                total_delay = self._compute_loop_delay(hour=datetime.now().hour)
                 self.shutdown_flag.wait(timeout=total_delay)
         
         self.logger.info("Background thread has finished.")
