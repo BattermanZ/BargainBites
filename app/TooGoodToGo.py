@@ -424,7 +424,8 @@ class TooGoodToGo:
             try:
                 # Reset consecutive errors on successful iteration
                 consecutive_errors = 0
-                
+                cycle_start = time.monotonic()
+
                 users_login_data = self.db.get_users_login_data()
                 available_items_favorites = self.db.get_available_items_favorites()
                 temp_available_items = {}
@@ -528,7 +529,11 @@ class TooGoodToGo:
                 if active_item_ids:
                     available_items_favorites = self._prune_seen_items(available_items_favorites, active_item_ids)
                 self.db.save_available_items_favorites(available_items_favorites)
-            
+                cycle_seconds = time.monotonic() - cycle_start
+                self.logger.info(
+                    f"Cycle complete: users_polled={len(user_keys)} "
+                    f"duration={cycle_seconds:.1f}s")
+
             except Exception as err:
                 # Log unexpected global errors
                 self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
