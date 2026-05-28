@@ -409,6 +409,7 @@ class TooGoodToGo:
                         time.sleep(random.uniform(20, 40))
                         available_items = self.get_favourite_items(key, client)
                         self.db.set_favourite_count_state(key, len(available_items), 0)
+                        consecutive_errors = 0
 
                         # Process each available item
                         for item in available_items:
