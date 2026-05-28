@@ -320,12 +320,21 @@ class TooGoodToGo:
     NIGHT_LOOP_MIN_SECONDS = 2700  # 45 min
     NIGHT_LOOP_MAX_SECONDS = 5400  # 90 min
     NIGHT_HOURS = (1, 2, 3, 4, 5, 6)
+    PROBE_EMPTY_USER_EVERY = 3
 
     @staticmethod
     def _user_needs_notifications(settings):
         if not settings:
             return False
         return any(settings.get(k, 0) for k in TooGoodToGo.NOTIFICATION_TYPES)
+
+    @staticmethod
+    def _should_skip_empty_user(last_count, cycles_since_probe):
+        """Skip a user whose last fetched favourites list was empty, unless we
+        haven't probed them for PROBE_EMPTY_USER_EVERY cycles."""
+        if last_count is None or last_count > 0:
+            return False
+        return cycles_since_probe < TooGoodToGo.PROBE_EMPTY_USER_EVERY
 
     @staticmethod
     def _compute_loop_delay(hour=None):
@@ -357,13 +366,18 @@ class TooGoodToGo:
                 temp_available_items = {}
                 active_item_ids = set()
 
-                # Only poll users who actually want at least one notification type.
-                user_keys = [
-                    uid for uid in users_login_data
-                    if self._user_needs_notifications(self.db.get_user_settings(uid))
-                ]
+                # Filter: notification settings on + not in empty-skip window.
+                user_keys = []
+                for uid in users_login_data:
+                    if not self._user_needs_notifications(self.db.get_user_settings(uid)):
+                        continue
+                    last_count, cycles_since_probe = self.db.get_favourite_count_state(uid)
+                    if self._should_skip_empty_user(last_count, cycles_since_probe):
+                        self.db.set_favourite_count_state(uid, last_count, cycles_since_probe + 1)
+                        continue
+                    user_keys.append(uid)
                 if not user_keys:
-                    self.logger.info("No users with active notifications - skipping API poll this cycle.")
+                    self.logger.info("No eligible users - skipping API poll this cycle.")
                 random.shuffle(user_keys)
                 
                 for key in user_keys:
@@ -374,7 +388,8 @@ class TooGoodToGo:
                         client = self._build_client(key)
                         time.sleep(random.uniform(20, 40))
                         available_items = self.get_favourite_items(key, client)
-                        
+                        self.db.set_favourite_count_state(key, len(available_items), 0)
+
                         # Process each available item
                         for item in available_items:
                             if self.shutdown_flag.is_set():

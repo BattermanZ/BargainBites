@@ -175,3 +175,13 @@ def test_compute_loop_delay_boundary_hours_use_day_mode():
     for h in (0, 7, 23):
         d = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=h)
         assert d <= 500
+
+
+def test_should_skip_user_with_recent_empty_favourites():
+    import TooGoodToGo
+    T = TooGoodToGo.TooGoodToGo
+    assert T._should_skip_empty_user(last_count=0, cycles_since_probe=0) is True
+    assert T._should_skip_empty_user(last_count=0, cycles_since_probe=2) is True
+    assert T._should_skip_empty_user(last_count=0, cycles_since_probe=3) is False
+    assert T._should_skip_empty_user(last_count=5, cycles_since_probe=0) is False
+    assert T._should_skip_empty_user(last_count=None, cycles_since_probe=0) is False

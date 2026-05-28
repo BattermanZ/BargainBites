@@ -172,3 +172,30 @@ CREATE TABLE IF NOT EXISTS admin_users
         self._local.cursor.execute('SELECT 1 FROM admin_users WHERE user_id = ?', (user_id_str,))
         return bool(self._local.cursor.fetchone())
 
+    def _ensure_favourite_counts_table(self):
+        self._connect()
+        self._local.cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_favourite_counts
+        (user_id TEXT PRIMARY KEY,
+         last_count INTEGER,
+         cycles_since_probe INTEGER DEFAULT 0)
+        ''')
+        self._local.conn.commit()
+
+    def get_favourite_count_state(self, user_id):
+        """Return (last_count, cycles_since_probe). (None, 0) if unknown."""
+        self._ensure_favourite_counts_table()
+        self._local.cursor.execute(
+            'SELECT last_count, cycles_since_probe FROM user_favourite_counts WHERE user_id = ?',
+            (user_id,))
+        row = self._local.cursor.fetchone()
+        if row is None:
+            return (None, 0)
+        return (row[0], row[1] or 0)
+
+    def set_favourite_count_state(self, user_id, last_count, cycles_since_probe):
+        self._ensure_favourite_counts_table()
+        self._local.cursor.execute(
+            'INSERT OR REPLACE INTO user_favourite_counts VALUES (?, ?, ?)',
+            (user_id, int(last_count), int(cycles_since_probe)))
+        self._local.conn.commit()
