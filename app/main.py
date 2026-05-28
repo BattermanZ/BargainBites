@@ -7,6 +7,8 @@ from Telegram import setup_bot
 from TooGoodToGo import TooGoodToGo
 import signal
 
+__version__ = "2.0.0"
+
 # Get the project root directory (one level up from app directory)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -111,8 +113,8 @@ async def main():
     tgtg_handler = TooGoodToGo(token, logger, admin_ids)
     bot = setup_bot(token, tgtg_handler, logger, admin_ids)
     
-    logger.info("Starting BargainBites bot...")
-    print("BargainBites bot is starting...")
+    logger.info(f"Starting BargainBites v{__version__}...")
+    print(f"BargainBites v{__version__} is starting...")
     print(f"Number of configured admin IDs: {len(admin_ids)}")
     print("Database will be stored in the 'database' folder")
     print("Bot is now running. Press Ctrl+C to stop.")

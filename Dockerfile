@@ -1,49 +1,40 @@
-# Stage 1: Build stage
-FROM python:3.13-slim AS builder
+# syntax=docker/dockerfile:1.7
 
-# Set work directory
-WORKDIR /app
+# Stage 1: build dependencies on a Debian 13 (trixie) Python image so the
+# resulting wheels are ABI-compatible with the distroless runtime.
+FROM python:3.13-slim-trixie AS builder
 
-# Install build dependencies
+WORKDIR /build
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential && \
-    rm -rf /var/lib/apt/lists/*
+        build-essential \
+        libffi-dev \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN pip install --no-cache-dir --upgrade pip
-
-# Copy only requirements to cache them in docker layer
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir --target=/install -r requirements.txt
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# App code + writable runtime directories owned by the distroless nonroot UID (65532).
+COPY app/ /app/app/
+RUN mkdir -p /app/logs /app/database \
+ && chown -R 65532:65532 /app /install
 
-# Copy project
-COPY . .
 
-# Stage 2: Runtime stage
-FROM python:3.13-slim
+# Stage 2: distroless Debian 13 runtime, rootless (uid 65532).
+FROM gcr.io/distroless/python3-debian13:nonroot
 
-# Set work directory
 WORKDIR /app
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev libssl-dev libffi-dev && \
-    rm -rf /var/lib/apt/lists/*
+COPY --from=builder --chown=65532:65532 /install /app/deps
+COPY --from=builder --chown=65532:65532 /app /app
 
-# Copy necessary files from builder
-COPY --from=builder /usr/local/lib/python3.13 /usr/local/lib/python3.13
-COPY --from=builder /usr/local/bin /usr/local/bin
-COPY --from=builder /app .
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/deps
 
-# Create necessary directories
-RUN mkdir -p /app/logs /app/database
+USER 65532:65532
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Run the application
-CMD ["python", "app/main.py"]
-
+# The distroless python3 image entrypoint is /usr/bin/python3.
+CMD ["app/main.py"]
