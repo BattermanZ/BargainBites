@@ -225,3 +225,14 @@ def test_persist_cookie_if_changed_writes_only_on_change():
     assert len(saved) == 1
     assert saved[0]["u1"]["cookie"] == "new"
     assert inst.users_login_data["u1"]["cookie"] == "new"
+
+
+def test_should_refresh_access_token_by_age():
+    import TooGoodToGo, datetime as _dt
+    T = TooGoodToGo.TooGoodToGo
+    now = _dt.datetime(2026, 5, 28, 12, 0, 0)
+    fresh = _dt.datetime(2026, 5, 28, 10, 0, 0)   # 2 h old
+    stale = _dt.datetime(2026, 5, 28, 8, 0, 0)    # 4 h old
+    assert T._should_refresh_access_token(now, fresh) is False
+    assert T._should_refresh_access_token(now, stale) is True
+    assert T._should_refresh_access_token(now, None) is False

@@ -342,6 +342,7 @@ class TooGoodToGo:
     NIGHT_LOOP_MAX_SECONDS = 5400  # 90 min
     NIGHT_HOURS = (1, 2, 3, 4, 5, 6)
     PROBE_EMPTY_USER_EVERY = 3
+    ACCESS_TOKEN_REFRESH_AFTER_SECONDS = 3 * 3600 + 30 * 60  # 3h30 — refresh before 4h expiry
 
     @staticmethod
     def _user_needs_notifications(settings):
@@ -370,6 +371,12 @@ class TooGoodToGo:
         return base + noise
 
     @staticmethod
+    def _should_refresh_access_token(now, last_refreshed):
+        if last_refreshed is None:
+            return False
+        return (now - last_refreshed).total_seconds() >= TooGoodToGo.ACCESS_TOKEN_REFRESH_AFTER_SECONDS
+
+    @staticmethod
     def _prune_seen_items(seen, active_ids):
         return {item_id: data for item_id, data in seen.items() if item_id in active_ids}
 
@@ -389,6 +396,24 @@ class TooGoodToGo:
             self._user_cooldowns.pop(user_id, None)
             return False
         return True
+
+    def _refresh_stale_tokens(self):
+        """Proactively refresh access tokens approaching their 4h lifetime so a
+        refresh doesn't land in the middle of get_items()."""
+        now = datetime.now()
+        with self._client_lock:
+            user_ids = list(self.connected_clients.keys())
+        for uid in user_ids:
+            with self._client_lock:
+                client = self.connected_clients.get(uid)
+            last_refreshed = getattr(client, "last_time_token_refreshed", None)
+            if not self._should_refresh_access_token(now, last_refreshed):
+                continue
+            try:
+                self.refresh_credentials(uid)
+                self.logger.info(f"Proactively refreshed token for user {uid}")
+            except Exception as e:
+                self.logger.warning(f"Proactive token refresh failed for {uid}: {e}")
 
     def get_available_items_per_user(self):
         consecutive_errors = 0
@@ -506,13 +531,16 @@ class TooGoodToGo:
                 # Log unexpected global errors
                 self.logger.error(f"Unexpected error in get_available_items_per_user: {err}", exc_info=True)
                 consecutive_errors += 1
-                
+
                 # If too many consecutive errors, add a longer pause
                 if consecutive_errors >= max_consecutive_errors:
                     self.logger.critical(f"Reached max consecutive errors ({max_consecutive_errors}). Adding extended pause.")
                     time.sleep(3600)  # 1-hour pause
                     consecutive_errors = 0
-            
+
+            if not self.shutdown_flag.is_set():
+                self._refresh_stale_tokens()
+
             if not self.shutdown_flag.is_set():
                 total_delay = self._compute_loop_delay(hour=datetime.now().hour)
                 self.shutdown_flag.wait(timeout=total_delay)
