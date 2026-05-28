@@ -30,6 +30,7 @@ class TooGoodToGo:
         self.connected_clients = {}   # user_id -> TgtgClient (per-user cache)
         self.pending_logins = {}  # telegram_user_id (str) -> {"client", "polling_id", "email"}
         self._client_lock = Lock()
+        self._user_cooldowns = {}  # user_id -> epoch seconds when cooldown expires
         self.shutdown_flag = Event()
         self.message_queue = Queue()
         asyncio.create_task(self.process_message_queue())
@@ -352,6 +353,23 @@ class TooGoodToGo:
     def _prune_seen_items(seen, active_ids):
         return {item_id: data for item_id, data in seen.items() if item_id in active_ids}
 
+    CAPTCHA_COOLDOWN_MIN = 1800   # 30 min
+    CAPTCHA_COOLDOWN_MAX = 3600   # 60 min
+
+    def _set_user_cooldown(self, user_id, min_seconds=None, max_seconds=None):
+        lo = self.CAPTCHA_COOLDOWN_MIN if min_seconds is None else min_seconds
+        hi = self.CAPTCHA_COOLDOWN_MAX if max_seconds is None else max_seconds
+        self._user_cooldowns[user_id] = time.time() + random.uniform(lo, hi)
+
+    def _is_user_on_cooldown(self, user_id):
+        until = self._user_cooldowns.get(user_id)
+        if until is None:
+            return False
+        if time.time() >= until:
+            self._user_cooldowns.pop(user_id, None)
+            return False
+        return True
+
     def get_available_items_per_user(self):
         consecutive_errors = 0
         max_consecutive_errors = 5
@@ -374,6 +392,8 @@ class TooGoodToGo:
                     last_count, cycles_since_probe = self.db.get_favourite_count_state(uid)
                     if self._should_skip_empty_user(last_count, cycles_since_probe):
                         self.db.set_favourite_count_state(uid, last_count, cycles_since_probe + 1)
+                        continue
+                    if self._is_user_on_cooldown(uid):
                         continue
                     user_keys.append(uid)
                 if not user_keys:
@@ -443,8 +463,11 @@ class TooGoodToGo:
                     except Exception as e:
                         err_str = str(e).lower()
                         if "captcha" in err_str:
-                            self.logger.warning(f"Captcha/Datadome block while polling user {key}; backing off 5 minutes.")
-                            self.shutdown_flag.wait(timeout=5 * 60)
+                            self._set_user_cooldown(key)
+                            self.logger.warning(
+                                f"Captcha/Datadome for user {key}; per-user cooldown set "
+                                f"until {datetime.fromtimestamp(self._user_cooldowns[key]).isoformat(timespec='seconds')}."
+                            )
                         self.logger.error(f"Error processing user {key}: {e}")
                         consecutive_errors += 1
                         if consecutive_errors >= max_consecutive_errors:

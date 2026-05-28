@@ -49,6 +49,20 @@ def test_prune_seen_items_keeps_only_active():
     assert set(pruned.keys()) == {"a", "c"}
 
 
+def test_user_cooldown_skip_and_expiry(monkeypatch):
+    import TooGoodToGo
+    import time
+    inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)
+    inst._user_cooldowns = {}
+    now = 1_000_000
+    monkeypatch.setattr(time, "time", lambda: now)
+    inst._set_user_cooldown("u1", min_seconds=1800, max_seconds=1800)
+    assert inst._is_user_on_cooldown("u1") is True
+    assert inst._is_user_on_cooldown("u2") is False
+    monkeypatch.setattr(time, "time", lambda: now + 1801)
+    assert inst._is_user_on_cooldown("u1") is False
+
+
 import asyncio
 import logging
 from queue import Queue
