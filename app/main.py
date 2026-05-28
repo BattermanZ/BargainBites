@@ -28,8 +28,9 @@ if not os.path.exists(logs_dir):
     os.makedirs(logs_dir)
 
 # Configure root logger
+_log_level = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO)
 logging.basicConfig(
-    level=logging.INFO,
+    level=_log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         # Console handler for Docker/Dozzle
@@ -87,7 +88,7 @@ async def shutdown(signal, loop):
             # Wait for tasks to complete with timeout
             await asyncio.wait(tasks, timeout=5)
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
+        logger.exception(f"Error during shutdown: {e}")
 
 def handle_exception(loop, context):
     msg = context.get("exception", context["message"])
@@ -114,28 +115,26 @@ async def main():
     bot = setup_bot(token, tgtg_handler, logger, admin_ids)
     
     logger.info(f"Starting BargainBites v{__version__}...")
-    print(f"BargainBites v{__version__} is starting...")
-    print(f"Number of configured admin IDs: {len(admin_ids)}")
-    print("Database will be stored in the 'database' folder")
-    print("Bot is now running. Press Ctrl+C to stop.")
-    
+    logger.info(f"Number of configured admin IDs: {len(admin_ids)}")
+    logger.info("Database will be stored in the 'database' folder")
+    logger.info("Bot is now running. Press Ctrl+C to stop.")
+
     try:
         await bot.polling(non_stop=True, timeout=60)
     except asyncio.CancelledError:
         logger.info("Bot polling was cancelled")
     except Exception as e:
-        logger.error(f"Error during bot polling: {e}")
+        logger.exception(f"Error during bot polling: {e}")
     finally:
         logger.info("Bot stopped")
-        print("Bot stopped. Goodbye!")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nShutdown initiated by keyboard interrupt...")
+        logger.info("Shutdown initiated by keyboard interrupt")
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.exception(f"Fatal error: {e}")
     finally:
-        print("Goodbye!")
+        logger.info("Goodbye")
 

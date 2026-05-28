@@ -135,7 +135,7 @@ class TooGoodToGo:
             else:
                 self.message_queue_text(telegram_user_id, f"❌ Unexpected login state: {state}")
         except TgtgAPIError as e:
-            self.logger.error(f"Login rate-limited for {telegram_user_id}: {e}")
+            self.logger.exception(f"Login rate-limited for {telegram_user_id}: {e}")
             self.message_queue_text(telegram_user_id, "❌ Too many requests. Please try again later.")
         except TgtgLoginError as e:
             self.logger.warning(f"Login blocked/failed for {telegram_user_id}: {e}")
@@ -144,7 +144,7 @@ class TooGoodToGo:
                 "🔒 *Login blocked by TGTG (anti-bot).* Try again later, or from a different network.",
             )
         except Exception as e:
-            self.logger.error(f"Unexpected error initiating login for {telegram_user_id}: {e}")
+            self.logger.exception(f"Unexpected error initiating login for {telegram_user_id}: {e}")
             self.message_queue_text(telegram_user_id, "❌ An error occurred during login. Please try again later.")
 
     def complete_login_with_pin(self, telegram_user_id, pin):
@@ -166,11 +166,11 @@ class TooGoodToGo:
             self.logger.info(f"Login completed for {telegram_user_id}")
             self.message_queue_text(telegram_user_id, "✅ You are now logged in!")
         except TgtgLoginError as e:
-            self.logger.error(f"PIN auth failed for {telegram_user_id}: {e}")
+            self.logger.exception(f"PIN auth failed for {telegram_user_id}: {e}")
             self.pending_logins[telegram_user_id] = pending  # allow retry
             self.message_queue_text(telegram_user_id, "❌ Invalid or expired PIN. Check your email and resend `/pin 12345`.")
         except Exception as e:
-            self.logger.error(f"Error completing login for {telegram_user_id}: {e}")
+            self.logger.exception(f"Error completing login for {telegram_user_id}: {e}")
             self.message_queue_text(telegram_user_id, "❌ Login failed. Please try `/login` again.")
 
     async def relogin(self, telegram_user_id, email):
@@ -192,10 +192,12 @@ class TooGoodToGo:
         with self._client_lock:
             cached = self.connected_clients.get(user_id)
         if cached is not None:
+            self.logger.debug(f"Reusing cached client for user {user_id}")
             return cached
         creds = self.find_credentials_by_telegramUserID(user_id)
         if not creds:
             raise Exception(f"No credentials found for user ID: {user_id}")
+        self.logger.debug(f"Cold-building client for user {user_id} (delay={cold_connect_delay})")
         if cold_connect_delay:
             time.sleep(random.uniform(10, 20))  # rate-limit cushion on cold connect
         client = TgtgClient(
@@ -227,7 +229,7 @@ class TooGoodToGo:
             self.logger.info(f"Successfully refreshed credentials for user {user_id}")
             return client
         except Exception as e:
-            self.logger.error(f"Failed to refresh credentials for user {user_id}: {e}")
+            self.logger.exception(f"Failed to refresh credentials for user {user_id}: {e}")
             with self._client_lock:
                 self.connected_clients.pop(user_id, None)
             return None
@@ -284,7 +286,7 @@ class TooGoodToGo:
                 self.logger.error(f"TGTG API error for {user_id}: {e}")
                 raise
             except Exception as e:
-                self.logger.error(f"Unexpected error in get_favourite_items for {user_id}: {e}")
+                self.logger.exception(f"Unexpected error in get_favourite_items for {user_id}: {e}")
                 raise
         raise Exception(f"get_favourite_items exhausted retries for {user_id}")
 
@@ -346,7 +348,7 @@ class TooGoodToGo:
                 await self.send_message_with_link(user_id, message, item_id, store_id, store_name)
             self.logger.info(f"Sent available items for user ID: {user_id}")
         except Exception as e:
-            self.logger.error(f"Error sending available items: {e}")
+            self.logger.exception(f"Error sending available items: {e}")
             await self.send_message(user_id, "❌ An error occurred while fetching available items. Please try again later.")
 
     NOTIFICATION_TYPES = ("sold_out", "new_stock", "stock_reduced", "stock_increased")
@@ -531,7 +533,7 @@ class TooGoodToGo:
                                 f"Captcha/Datadome for user {key}; per-user cooldown set "
                                 f"until {datetime.fromtimestamp(self._user_cooldowns[key]).isoformat(timespec='seconds')}."
                             )
-                        self.logger.error(f"Error processing user {key}: {e}")
+                        self.logger.exception(f"Error processing user {key}: {e}")
                         consecutive_errors += 1
                         if consecutive_errors >= max_consecutive_errors:
                             self.logger.critical(f"Reached max consecutive errors ({max_consecutive_errors}). Pausing processing.")
@@ -582,7 +584,7 @@ class TooGoodToGo:
                         await self.send_message_with_link(key, message, item_id, store_id, store_name)
                     self.logger.info(f"Message sent to user {key}")
                 except Exception as e:
-                    self.logger.error(f"Error sending message: {e}")
+                    self.logger.exception(f"Error sending message: {e}")
                 finally:
                     self.message_queue.task_done()
             except queue.Empty:
@@ -623,24 +625,24 @@ class TooGoodToGo:
                     if hasattr(client, 'close') and callable(client.close):
                         await client.close()
             except Exception as e:
-                self.logger.error(f"Error closing TGTG clients: {e}")
-            
+                self.logger.exception(f"Error closing TGTG clients: {e}")
+
             try:
                 if hasattr(self.bot, 'session') and self.bot.session:
                     await self.bot.session.close()
                 await self.bot.close()
             except Exception as e:
-                self.logger.error(f"Error closing bot: {e}")
-            
+                self.logger.exception(f"Error closing bot: {e}")
+
             # Close database connection last
             try:
                 self.logger.info("Closing database connection...")
                 self.db.close()
             except Exception as e:
-                self.logger.error(f"Error closing database: {e}")
-            
+                self.logger.exception(f"Error closing database: {e}")
+
         except Exception as e:
-            self.logger.error(f"Error during graceful shutdown: {e}")
+            self.logger.exception(f"Error during graceful shutdown: {e}")
         finally:
             self.logger.info("Graceful shutdown complete.")
 

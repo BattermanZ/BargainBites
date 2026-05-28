@@ -3,6 +3,9 @@ import json
 import threading
 import secrets
 import string
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Database:
     _local = threading.local()
@@ -13,6 +16,7 @@ class Database:
 
     def _connect(self):
         if not hasattr(self._local, 'conn') or self._local.conn is None:
+            logger.debug(f"Opening DB connection: {self.db_file}")
             self._local.conn = sqlite3.connect(self.db_file)
             self._local.cursor = self._local.conn.cursor()
         self.create_tables()
@@ -162,6 +166,7 @@ CREATE TABLE IF NOT EXISTS admin_users
 
     def close(self):
         if hasattr(self._local, 'conn') and self._local.conn:
+            logger.debug(f"Closing DB connection: {self.db_file}")
             self._local.conn.close()
             self._local.conn = None
             self._local.cursor = None
