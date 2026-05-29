@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     user: "65532:65532"
     env_file: .env
+    environment:
+      - TZ=Europe/Amsterdam
     volumes:
       - ./db:/app/database
       - ./logs:/app/logs

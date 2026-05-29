@@ -298,8 +298,10 @@ class TooGoodToGo:
         address = store.get('store_location', {}).get('address', {}).get('address_line', '')
         inner = item.get('item', {})
         item_id = inner.get('item_id', '')
-        minor_units = inner.get('price_including_taxes', {}).get('minor_units', 0)
-        price = minor_units / 100
+        price_obj = inner.get('price_including_taxes', {})
+        minor_units = price_obj.get('minor_units', 0)
+        decimals = price_obj.get('decimals', 2)
+        price = minor_units / (10 ** decimals)
         items_available = item.get('items_available', 0)
 
         pickup_time = ""
