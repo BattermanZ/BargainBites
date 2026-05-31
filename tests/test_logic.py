@@ -31,7 +31,7 @@ def test_format_message_handles_missing_optional_fields():
     import TooGoodToGo
     item = {
         "items_available": 3,
-        "item": {"item_id": "i1", "price_including_taxes": {"minor_units": 499}},
+        "item": {"item_id": "i1", "item_price": {"code": "EUR", "minor_units": 499, "decimals": 2}},
         "store": {"store_id": "s1", "store_name": "Bakery",
                   "store_location": {"address": {"address_line": "1 Main St"}}},
         # no pickup_interval

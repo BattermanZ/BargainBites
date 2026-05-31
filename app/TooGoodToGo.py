@@ -298,7 +298,10 @@ class TooGoodToGo:
         address = store.get('store_location', {}).get('address', {}).get('address_line', '')
         inner = item.get('item', {})
         item_id = inner.get('item_id', '')
-        price_obj = inner.get('price_including_taxes', {})
+        # The TGTG item/v8 API exposes the bag price as `item_price`
+        # (older code looked for `price_including_taxes`, which the API
+        # does not return, so the price always rendered as 0).
+        price_obj = inner.get('item_price') or inner.get('price_including_taxes') or {}
         minor_units = price_obj.get('minor_units', 0)
         decimals = price_obj.get('decimals', 2)
         price = minor_units / (10 ** decimals)
