@@ -1,186 +1,303 @@
 # BargainBites
 
-**BargainBites** is a Python app that helps you track and grab discounted food deals from Too Good To Go. It can handle multiple users, group chats, and private chats with interactive Telegram bot notifications, making saving food waste more engaging. 🍽️
+**BargainBites** is a self-hosted Telegram bot that watches your [Too Good To Go](https://www.toogoodtogo.com/) favourites and pings you the moment a surprise bag comes back in stock — so you never miss a deal and help fight food waste. 🍽️
+
+It supports multiple users, private and group chats, per-user notification preferences, and a store blacklist, all backed by a local SQLite database.
+
+> **Current version:** 2.0.0 — built for `tgtg` 0.19.0 with the email **PIN** login flow.
+
+---
 
 ## Features
 
-- **Login Made Easy**: Use the Telegram bot to log in with your email.
-- **Tailored Alerts**: Get notified when items are back in stock, sold out, or when something changes.
-- **Always Updated**: The app keeps an eye on your favourites in the background.
-- **Multi-User Support**: Multiple users can log in and use the bot simultaneously.
-- **Private Chat and Token Access**: Authorise private access using admin-generated tokens.
-- **Admin Features**: Includes admin-only commands for managing users and tokens.
-- **Interactive Blacklist Management**: Users can blacklist or unblacklist stores.
-- **Custom Alerts**: Set when and how to be notified about deals using an inline keyboard.
-- **Secure Storage**: 💾 Saves login and preferences securely in a local SQLite database.
+- **PIN-based login** — log in with just your TGTG email; you confirm with a short PIN sent to your inbox. No password ever stored.
+- **Smart notifications** — get alerted on `new stock`, `sold out`, `stock increased`, and `stock reduced`, toggled individually per chat.
+- **Background polling** — checks your favourites continuously with randomised timing and a quieter "night mode" to stay under TGTG's bot-detection radar.
+- **Multi-user & group chats** — many people can use the same bot at once, in private DMs or shared groups.
+- **Private access tokens** — admins can hand out one-time invite tokens to authorise specific users.
+- **Interactive store blacklist** — mute stores you don't care about, straight from the notification message or via `/blacklist`.
+- **Secure, local storage** — credentials and preferences live in a local SQLite database; nothing leaves your server.
+- **Hardened container** — ships as a rootless, distroless Docker image.
 
-## Getting Started
+---
 
-### What You Need
+## Quick Start (Docker Compose — recommended)
 
-- Docker (optional)
-- A Too Good To Go account
-- A Telegram bot token
-- Python 3.12 or higher
+### 1. Prerequisites
 
-### Setup
+- [Docker](https://docs.docker.com/get-docker/) with Compose v2
+- A **Telegram bot token** — create one by messaging [@BotFather](https://t.me/BotFather) and copying the token it gives you
+- Your **Telegram numeric user ID** — get it from [@userinfobot](https://t.me/userinfobot) (needed for admin features)
+- A **Too Good To Go account** (the regular consumer app account)
 
-1. Clone this repo:
+### 2. Get the code
 
-   ```bash
-   git clone <repository-url>
-   cd <repository-folder>
-   ```
+```bash
+git clone https://github.com/BattermanZ/BargainBites.git
+cd BargainBites
+```
 
-2. **Optional**: Use Docker for setup:
+### 3. Configure
 
-   ```bash
-   docker build -t bargainbites .
-   docker run -d --name bargainbites-container bargainbites
-   ```
+```bash
+cp .env.example .env
+```
 
-3. Create a `.env` file from the template:
+Edit `.env`:
 
-   ```bash
-   cp .env.example .env
-   ```
+```ini
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=123456:ABC-your-token-from-botfather
+TELEGRAM_ADMIN_IDS=123456789            # comma-separated, e.g. 123456789,987654321
 
-   Then edit `.env` with your values:
-   ```ini
-   TELEGRAM_BOT_TOKEN=your_bot_token_here
-   TELEGRAM_ADMIN_IDS=comma_separated_admin_ids  # e.g., 123456789,987654321
-   ```
+# Logging (optional, defaults to INFO)
+LOG_LEVEL=INFO                          # DEBUG | INFO | WARNING | ERROR
+```
 
-4. Run without Docker:
+The compose file mounts two host folders for persistent state and sets the
+timezone (used to show pickup times in your local time and to drive night mode):
 
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   python3 app/main.py
-   ```
+```yaml
+# docker-compose.yml (excerpt)
+environment:
+  - TZ=Europe/Amsterdam                 # change to your timezone
+volumes:
+  - ./db:/app/database                  # SQLite database
+  - ./logs:/app/logs                    # rotating log files
+```
 
-5. **Login to Too Good To Go**: 🔑 Enter this in Telegram:
+> **Note:** the published image in `docker-compose.yml` points at a private
+> registry (`registry.batterlan.cc`). To run your own build, either replace the
+> `image:` line with `build: .`, or build and tag the image yourself (see
+> [Building the image](#building-the-image)).
 
-   *❗️️This is necessary if you want to use the bot❗️*
+### 4. Run
 
-   ```
-   /login email@example.com
-   ```
+```bash
+docker compose up -d
+docker compose logs -f          # watch it start; Ctrl+C to stop watching
+```
 
-   *Check your email for a confirmation link. No password needed!*
+### 5. Log in from Telegram
 
-## How to Use It
+Open a chat with your bot and:
 
-### General Users
+```
+/login your-email@example.com
+```
 
-- Each user must have their own Too Good To Go account to use the bot.
-- Use the bot directly in a private chat or add it to a group chat for shared notifications.
-- If using a group chat:
-  - Grant it admin rights (it needs to manage messages). 🔧
-  - Turn off its privacy mode so it can read all group messages. 🔓
+You'll receive a **PIN code by email** from Too Good To Go. Send it back to the bot:
 
-### Admin Users
+```
+/pin 12345
+```
 
-Admins can manage tokens, and authorise private users. Admins are configured via the `config.ini` file using their Telegram user IDs.
+That's it — you're logged in and will start receiving alerts. 🎉
 
-### Commands You Can Use
+---
 
-#### General Commands
+## Running without Docker
 
-- `/help`: 📖 Get instructions.
-- `/start`: ▶️ Start or restart the bot.
-- `/login <email>`: 🔑 Log in to Too Good To Go with your email.
-- `/settings`: ⚙️ Adjust your notification preferences.
-- `/info`: ℹ️ See what deals are currently available.
-- `/blacklist`: 🚫 View and manage blacklisted stores interactively.
+Requires **Python 3.12+**.
 
-#### Admin Commands
+```bash
+git clone https://github.com/BattermanZ/BargainBites.git
+cd BargainBites
 
-- `/generate_token`: 🔑 Generate a private access token.
-- `/list_tokens`: 📋 View all generated tokens and their usage statuses.
-- `/remove_blacklist <store_id>`: 🗑️ Remove a store from the blacklist manually.
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
-## Key Features Explained
+cp .env.example .env              # then edit it (see Configure, above)
 
-### Private Access Tokens
+# Export the variables and run (the app reads them from the environment):
+set -a; source .env; set +a
+python3 app/main.py
+```
 
-Admins can generate private tokens to authorise specific users in private chats:
+The app creates `database/` and `logs/` folders in the project root on first run.
 
-1. Use `/generate_token` to create a token.
-2. Share the token with the user you wish to authorise.
-3. The user enters `/start <token>` in a private chat with the bot to gain access.
+---
 
-### Interactive Settings
+## Using the Bot
 
-Notification settings are managed using an inline keyboard:
+### Logging in
 
-- Toggle notifications for events like `sold_out`, `new_stock`, `stock_increased`, and `stock_reduced`.
-- Use buttons to enable or disable all notifications at once.
+| Step | Command | What happens |
+|------|---------|--------------|
+| 1 | `/login email@example.com` | Requests a login; TGTG emails you a PIN |
+| 2 | `/pin 12345` | Confirms the PIN and finishes login |
+| — | `/relogin email@example.com` | Force a fresh login (e.g. after credentials expire) |
 
-### Blacklist Management
+No password is needed or stored — login works entirely through the emailed PIN.
 
-- Add stores to the blacklist to stop receiving notifications about them.
-- Remove stores interactively via `/blacklist` or manually with `/remove_blacklist <store_id>`.
-- Blacklist buttons are also available directly in notification messages.
+### Everyday commands
 
-### Background Checks
+| Command | Description |
+|---------|-------------|
+| `/start` | Start the bot (or redeem an invite token: `/start <token>`) |
+| `/help` | Show usage instructions |
+| `/login <email>` | Log in to Too Good To Go |
+| `/pin <code>` | Complete login with the emailed PIN |
+| `/relogin <email>` | Re-authenticate from scratch |
+| `/info` | Show favourites that currently have bags available |
+| `/settings` | Toggle which events notify you (inline buttons) |
+| `/blacklist` | View and manage muted stores |
+| `/remove_blacklist <store_id>` | Unmute a store by ID |
 
-- The app automatically checks for new available bags from your favourites every 15 minutes with random intervals to avoid bot detection.
-- Additional random delays between user checks (20-40 seconds) help prevent CAPTCHA challenges.
-- The timing includes random jitter (±2 minutes) and small noise (±10 seconds) for less predictable behavior.
+### Admin commands
+
+Available only to user IDs listed in `TELEGRAM_ADMIN_IDS`:
+
+| Command | Description |
+|---------|-------------|
+| `/generate_token` | Create a one-time invite token for a new private user |
+| `/list_tokens` | List all tokens and whether they've been used |
+
+---
+
+## How it Works
+
+### Notification settings
+
+`/settings` opens an inline keyboard where you toggle each alert type
+independently: **sold out**, **new stock**, **stock reduced**, **stock
+increased**, plus shortcuts to enable or disable everything at once.
+🟢 = enabled, 🔴 = disabled.
+
+### Private access tokens
+
+By default only admins (and chats that have logged in) can use the bot. To grant
+a specific person access in a private chat:
+
+1. An admin runs `/generate_token`.
+2. The admin shares the token with the new user.
+3. The user sends `/start <token>` to the bot to unlock access.
+
+### Background polling & anti-detection
+
+To avoid tripping Too Good To Go's bot detection, polling is deliberately
+irregular:
+
+- **Day mode** (07:00–00:59 local): a fresh bag check every ~5–8 minutes.
+- **Night mode** (01:00–06:59 local): checks slow to every ~45–90 minutes.
+- **Per-user spacing**: a random 20–40 s delay between users each cycle.
+- **Jitter & shuffling**: small random noise on every interval and a shuffled
+  user order each pass.
+- **CAPTCHA handling**: if a user hits a CAPTCHA/Datadome block, that user is put
+  on a 30–60 minute cooldown instead of stalling everyone.
+- **Idle skipping**: users with no active notification settings, or with no
+  favourites, are probed less often.
+
+Local time (and therefore night-mode hours and displayed pickup times) is driven
+by the `TZ` environment variable.
+
+---
+
+## Configuration Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | ✅ | — | Bot token from @BotFather |
+| `TELEGRAM_ADMIN_IDS` | — | _(none)_ | Comma-separated numeric Telegram user IDs with admin rights |
+| `LOG_LEVEL` | — | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `TZ` | — | container default | Timezone for pickup times and night mode (e.g. `Europe/Amsterdam`) |
+
+---
+
+## Building the Image
+
+To build and run your own image instead of the prebuilt one:
+
+```bash
+docker build -t bargainbites:local .
+```
+
+Then point `docker-compose.yml` at it:
+
+```yaml
+services:
+  bargainbites:
+    image: bargainbites:local
+    # ...rest unchanged
+```
+
+The image is a two-stage build: dependencies are compiled on Debian 13 (trixie)
+and copied into a rootless [distroless](https://github.com/GoogleContainerTools/distroless)
+runtime that runs as UID `65532`.
+
+---
+
+## Development
+
+Install dev dependencies and run the test suite:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements-dev.txt
+PYTHONPATH=app python -m pytest
+```
+
+Tests live in `tests/` and cover the message formatting, login/PIN flow,
+polling-cadence logic, cookie persistence, and database helpers.
+
+---
 
 ## Project Layout
 
 ```
+.
 ├── app/
-│   ├── database.py          # Handles SQLite database
-│   ├── TooGoodToGo.py      # Talks to the Too Good To Go API
-│   ├── Telegram.py         # Manages Telegram bot
-│   ├── main.py             # Runs everything
-├── Dockerfile              # Docker setup
-├── requirements.txt        # Python dependencies
-├── .env                   # Environment variables (not in git)
-├── .env.example           # Template for .env file
-├── database/              # Where SQLite stores data
-└── logs/                  # Keeps logs
+│   ├── main.py            # Entry point: logging, signals, event loop
+│   ├── Telegram.py        # Telegram bot handlers and inline keyboards
+│   ├── TooGoodToGo.py     # TGTG API integration, polling loop, formatting
+│   └── database.py        # SQLite persistence
+├── tests/                 # pytest suite
+├── docs/                  # design/implementation notes
+├── Dockerfile             # Distroless, rootless multi-stage build
+├── docker-compose.yml     # Recommended deployment
+├── requirements.txt       # Runtime dependencies
+├── requirements-dev.txt   # + test tooling
+├── .env.example           # Configuration template
+├── database/              # SQLite data (created at runtime; gitignored)
+└── logs/                  # Rotating log files (created at runtime; gitignored)
 ```
 
-## Environment Variables
+---
 
-The app uses a `.env` file for configuration:
+## Troubleshooting
 
-- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token from @BotFather
-- `TELEGRAM_ADMIN_IDS`: Comma-separated list of Telegram user IDs for admin access
+- **No alerts arriving** — make sure you completed both `/login` *and* `/pin`,
+  and that you've enabled at least one event in `/settings`.
+- **Prices showing correctly?** — fixed in 2.0.0; bag prices are read from the
+  TGTG `item_price` field.
+- **Login keeps failing** — try `/relogin <email>`; TGTG sessions expire and the
+  PIN is single-use and short-lived.
+- **CAPTCHA / rate limits** — the bot self-throttles; give an affected account
+  30–60 minutes to clear its cooldown.
+- **Check the logs** — `docker compose logs -f`, or set `LOG_LEVEL=DEBUG` for
+  more detail.
 
-## Anti-Bot Protection
+---
 
-The app implements several measures to avoid triggering Too Good To Go's bot detection:
+## A Note on AI Assistance
 
-- Random delays between checks (15 minutes base with ±2 minutes jitter)
-- Additional small random noise (±10 seconds) for less predictable timing
-- Increased delays between user checks (20-40 seconds)
-- Automatic handling of rate limits and CAPTCHA challenges
-- Random shuffling of user order during checks
+Parts of this project were built and refactored with AI tools. The code is
+covered by an automated test suite, but please review it and test in a safe
+environment before relying on it in production. Your security and privacy matter
+— proceed thoughtfully. 🛡️
 
-## AI Warning
+---
 
-This app was partially built and adapted using AI tools. While every effort has been made to ensure the code is functional and secure, please:
+## Acknowledgements
 
-- Carefully review the code before using it in production.
-- Test it in a safe environment to confirm it works as expected.
+- **[tgtg-python](https://github.com/ahivert/tgtg-python)** — the Too Good To Go API client.
+- **[TooGoodToGo-TelegramBot](https://github.com/TorbenStriegel/TooGoodToGo-TelegramBot)** — the original project this was forked from and adapted.
+- **[Too Good To Go](https://www.toogoodtogo.com/)** — for helping us all waste less food. 🌍
 
-Your security and privacy are important—proceed with caution! 🛡️
-
-## Shoutouts
-
-Big thanks to these awesome projects:
-
-- **[tgtg-python](https://github.com/ahivert/tgtg-python)**: For the Too Good To Go API wrapper.
-- **[TooGoodToGo-TelegramBot](https://github.com/TorbenStriegel/TooGoodToGo-TelegramBot)**: The app I forked from and adapted for this project. Many thanks for your implementation!
-- **[Too Good To Go](https://www.toogoodtogo.com/)**: For helping us all reduce food waste. 🌍
+---
 
 ## License
 
-This project is licensed under the GPL 3 License.
-
+Licensed under the **GNU GPL v3**. See [`LICENSE`](LICENSE) for details.
