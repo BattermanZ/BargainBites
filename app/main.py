@@ -2,23 +2,15 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 import asyncio
-from dotenv import load_dotenv
 from Telegram import setup_bot
 from TooGoodToGo import TooGoodToGo
 import signal
 
+__version__ = "2.0.0"
+
 # Get the project root directory (one level up from app directory)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Load environment variables from project root
-env_path = os.path.join(PROJECT_ROOT, '.env')
-if not os.path.exists(env_path):
-    raise FileNotFoundError(
-        f".env file not found at: {env_path}\n"
-        f"Please copy .env.template to .env and fill in your values."
-    )
-load_dotenv(env_path)
 
 # Setup logging in project root
 logs_dir = os.path.join(PROJECT_ROOT, 'logs')
@@ -26,8 +18,9 @@ if not os.path.exists(logs_dir):
     os.makedirs(logs_dir)
 
 # Configure root logger
+_log_level = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO)
 logging.basicConfig(
-    level=logging.INFO,
+    level=_log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         # Console handler for Docker/Dozzle
@@ -85,7 +78,7 @@ async def shutdown(signal, loop):
             # Wait for tasks to complete with timeout
             await asyncio.wait(tasks, timeout=5)
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
+        logger.exception(f"Error during shutdown: {e}")
 
 def handle_exception(loop, context):
     msg = context.get("exception", context["message"])
@@ -111,29 +104,27 @@ async def main():
     tgtg_handler = TooGoodToGo(token, logger, admin_ids)
     bot = setup_bot(token, tgtg_handler, logger, admin_ids)
     
-    logger.info("Starting BargainBites bot...")
-    print("BargainBites bot is starting...")
-    print(f"Number of configured admin IDs: {len(admin_ids)}")
-    print("Database will be stored in the 'database' folder")
-    print("Bot is now running. Press Ctrl+C to stop.")
-    
+    logger.info(f"Starting BargainBites v{__version__}...")
+    logger.info(f"Number of configured admin IDs: {len(admin_ids)}")
+    logger.info("Database will be stored in the 'database' folder")
+    logger.info("Bot is now running. Press Ctrl+C to stop.")
+
     try:
         await bot.polling(non_stop=True, timeout=60)
     except asyncio.CancelledError:
         logger.info("Bot polling was cancelled")
     except Exception as e:
-        logger.error(f"Error during bot polling: {e}")
+        logger.exception(f"Error during bot polling: {e}")
     finally:
         logger.info("Bot stopped")
-        print("Bot stopped. Goodbye!")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nShutdown initiated by keyboard interrupt...")
+        logger.info("Shutdown initiated by keyboard interrupt")
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.exception(f"Fatal error: {e}")
     finally:
-        print("Goodbye!")
+        logger.info("Goodbye")
 

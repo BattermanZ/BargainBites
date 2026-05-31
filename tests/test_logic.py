@@ -1,0 +1,289 @@
+import pytest
+
+@pytest.mark.parametrize("settings,expected", [
+    ({"sold_out": 0, "new_stock": 0, "stock_reduced": 0, "stock_increased": 0}, False),
+    ({"sold_out": 0, "new_stock": 1, "stock_reduced": 0, "stock_increased": 0}, True),
+    ({}, False),
+])
+def test_user_needs_notifications(settings, expected):
+    import TooGoodToGo
+    assert TooGoodToGo.TooGoodToGo._user_needs_notifications(settings) is expected
+
+
+def test_import_toogoodtogo_module():
+    import TooGoodToGo
+    assert hasattr(TooGoodToGo, "TooGoodToGo")
+
+
+def test_credentials_from_client_reads_token_fields():
+    import TooGoodToGo
+
+    class FakeClient:
+        access_token = "AT"
+        refresh_token = "RT"
+        cookie = "datadome=abc"
+
+    creds = TooGoodToGo.TooGoodToGo._credentials_from_client(FakeClient())
+    assert creds == {"access_token": "AT", "refresh_token": "RT", "cookie": "datadome=abc"}
+
+
+def test_format_message_handles_missing_optional_fields():
+    import TooGoodToGo
+    item = {
+        "items_available": 3,
+        "item": {"item_id": "i1", "item_price": {"code": "EUR", "minor_units": 499, "decimals": 2}},
+        "store": {"store_id": "s1", "store_name": "Bakery",
+                  "store_location": {"address": {"address_line": "1 Main St"}}},
+        # no pickup_interval
+    }
+    message, item_id, store_id, store_name = TooGoodToGo.TooGoodToGo.format_message(item, "new_stock")
+    assert item_id == "i1" and store_id == "s1" and store_name == "Bakery"
+    assert "€4.99" in message and "3 bags available" in message
+    assert message.startswith("*NEW BAGS AVAILABLE*")
+
+
+def test_prune_seen_items_keeps_only_active():
+    import TooGoodToGo
+    seen = {"a": {"items_available": 1}, "b": {"items_available": 0}, "c": {"items_available": 2}}
+    pruned = TooGoodToGo.TooGoodToGo._prune_seen_items(seen, active_ids={"a", "c"})
+    assert set(pruned.keys()) == {"a", "c"}
+
+
+def test_awaiting_input_roundtrip():
+    import TooGoodToGo
+    inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)
+    inst.awaiting_input = {}
+    assert inst.get_awaiting("u1") is None          # nothing pending
+    inst.set_awaiting("u1", "email")
+    assert inst.get_awaiting("u1") == "email"
+    assert inst.get_awaiting("u2") is None           # isolated per chat
+    inst.set_awaiting("u1", "pin")                    # overwrite
+    assert inst.get_awaiting("u1") == "pin"
+    inst.clear_awaiting("u1")
+    assert inst.get_awaiting("u1") is None
+    inst.clear_awaiting("u1")                         # idempotent, no error
+
+
+def test_awaiting_helpers_tolerate_missing_dict():
+    import TooGoodToGo
+    inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)  # no __init__
+    # Helpers must not crash before awaiting_input is initialised.
+    assert inst.get_awaiting("u1") is None
+    inst.clear_awaiting("u1")
+    inst.set_awaiting("u1", "token")
+    assert inst.get_awaiting("u1") == "token"
+
+
+@pytest.mark.parametrize("text,valid", [
+    ("a@b.co", True),
+    ("user.name+tag@example.com", True),
+    ("/info", False),
+    ("", False),
+    ("notanemail", False),
+    ("12345", False),
+])
+def test_is_valid_email(text, valid):
+    import TooGoodToGo
+    assert TooGoodToGo.TooGoodToGo._is_valid_email(text) is valid
+
+
+def test_user_cooldown_skip_and_expiry(monkeypatch):
+    import TooGoodToGo
+    import time
+    inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)
+    inst._user_cooldowns = {}
+    now = 1_000_000
+    monkeypatch.setattr(time, "time", lambda: now)
+    inst._set_user_cooldown("u1", min_seconds=1800, max_seconds=1800)
+    assert inst._is_user_on_cooldown("u1") is True
+    assert inst._is_user_on_cooldown("u2") is False
+    monkeypatch.setattr(time, "time", lambda: now + 1801)
+    assert inst._is_user_on_cooldown("u1") is False
+
+
+import asyncio
+import logging
+from queue import Queue
+from threading import Event, Lock
+
+
+def _bare_instance():
+    """Build a TooGoodToGo without running __init__ (which starts threads/loops)."""
+    import TooGoodToGo
+    inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)
+    inst.logger = logging.getLogger("test")
+    inst.message_queue = Queue()
+    inst.connected_clients = {}
+    inst._client_lock = Lock()
+    return inst
+
+
+def test_process_message_queue_dispatches_by_tuple_length():
+    inst = _bare_instance()
+    inst.shutdown_flag = Event()
+    calls = {"text": [], "link": []}
+
+    async def fake_send(key, message):
+        calls["text"].append((key, message))
+
+    async def fake_send_link(key, message, item_id, store_id, store_name):
+        calls["link"].append((key, message, item_id, store_id, store_name))
+
+    inst.send_message = fake_send
+    inst.send_message_with_link = fake_send_link
+    inst.message_queue.put(("u1", "hello"))
+    inst.message_queue.put(("u2", "deal", "i1", "s1", "Bakery"))
+
+    async def run():
+        task = asyncio.create_task(inst.process_message_queue())
+        while len(calls["text"]) + len(calls["link"]) < 2:
+            await asyncio.sleep(0.02)
+        inst.shutdown_flag.set()
+        await task
+
+    asyncio.run(run())
+    assert calls["text"] == [("u1", "hello")]
+    assert calls["link"] == [("u2", "deal", "i1", "s1", "Bakery")]
+
+
+def test_complete_login_with_pin_no_pending_login():
+    inst = _bare_instance()
+    inst.pending_logins = {}
+    inst.complete_login_with_pin("u1", "12345")
+    payload = inst.message_queue.get_nowait()
+    assert payload[0] == "u1"
+    assert "No pending login" in payload[1]
+    assert "u1" not in inst.pending_logins
+
+
+def test_complete_login_with_pin_preserves_pending_on_bad_pin():
+    from tgtg.exceptions import TgtgLoginError
+    inst = _bare_instance()
+
+    class FailingClient:
+        access_token = refresh_token = cookie = None
+
+        def _auth_by_pin(self, polling_id, pin):
+            raise TgtgLoginError(400, b"bad pin")
+
+    pending = {"client": FailingClient(), "polling_id": "pid", "email": "x@y.z"}
+    inst.pending_logins = {"u1": pending}
+    inst.complete_login_with_pin("u1", "99999")
+    assert inst.pending_logins.get("u1") is pending  # restored so the user can retry
+    payload = inst.message_queue.get_nowait()
+    assert "Invalid or expired PIN" in payload[1]
+
+
+def test_complete_login_with_pin_success_saves_credentials():
+    inst = _bare_instance()
+    inst.users_login_data = {}
+    inst.users_settings_data = {}
+
+    class FakeDB:
+        def save_users_login_data(self, data):
+            pass
+
+        def save_users_settings_data(self, data):
+            pass
+
+    inst.db = FakeDB()
+
+    class OkClient:
+        access_token = "AT"
+        refresh_token = "RT"
+        cookie = "ck"
+
+        def _auth_by_pin(self, polling_id, pin):
+            pass
+
+    client = OkClient()
+    inst.pending_logins = {"u1": {"client": client, "polling_id": "pid", "email": "x@y.z"}}
+    inst.complete_login_with_pin("u1", "11111")
+    assert inst.users_login_data["u1"] == {"access_token": "AT", "refresh_token": "RT", "cookie": "ck"}
+    assert "u1" not in inst.pending_logins
+    assert inst.connected_clients["u1"] is client  # reused for a fast first /info
+    payload = inst.message_queue.get_nowait()
+    assert "logged in" in payload[1].lower()
+
+
+def test_compute_loop_delay_in_day_range():
+    import TooGoodToGo
+    # Day mode: 5–8 minutes (300–480 s) plus small noise (~±10s)
+    for _ in range(50):
+        delay = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=14)
+        assert 280 <= delay <= 500, delay
+
+
+def test_compute_loop_delay_in_night_range():
+    import TooGoodToGo
+    # Night mode: 45–90 minutes (2700–5400 s) for hours 1..6 inclusive
+    for h in (1, 3, 6):
+        for _ in range(20):
+            d = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=h)
+            assert 2700 <= d <= 5400, (h, d)
+
+def test_compute_loop_delay_boundary_hours_use_day_mode():
+    import TooGoodToGo
+    for h in (0, 7, 23):
+        d = TooGoodToGo.TooGoodToGo._compute_loop_delay(hour=h)
+        assert d <= 500
+
+
+def test_should_skip_user_with_recent_empty_favourites():
+    import TooGoodToGo
+    T = TooGoodToGo.TooGoodToGo
+    assert T._should_skip_empty_user(last_count=0, cycles_since_probe=0) is True
+    assert T._should_skip_empty_user(last_count=0, cycles_since_probe=2) is True
+    assert T._should_skip_empty_user(last_count=0, cycles_since_probe=3) is False
+    assert T._should_skip_empty_user(last_count=5, cycles_since_probe=0) is False
+    assert T._should_skip_empty_user(last_count=None, cycles_since_probe=0) is False
+
+
+def test_persist_cookie_if_changed_writes_only_on_change():
+    inst = _bare_instance()
+    saved = []
+
+    class FakeDB:
+        def save_users_login_data(self, data):
+            saved.append({k: dict(v) for k, v in data.items()})
+
+    inst.db = FakeDB()
+    inst.users_login_data = {"u1": {"access_token": "AT", "refresh_token": "RT", "cookie": "old"}}
+
+    class FakeClient:
+        access_token = "AT"
+        refresh_token = "RT"
+        cookie = "old"  # unchanged
+
+    inst._persist_cookie_if_changed("u1", FakeClient())
+    assert saved == []  # nothing written
+
+    FakeClient.cookie = "new"
+    inst._persist_cookie_if_changed("u1", FakeClient())
+    assert len(saved) == 1
+    assert saved[0]["u1"]["cookie"] == "new"
+    assert inst.users_login_data["u1"]["cookie"] == "new"
+
+
+def test_should_refresh_access_token_by_age():
+    import TooGoodToGo, datetime as _dt
+    T = TooGoodToGo.TooGoodToGo
+    now = _dt.datetime(2026, 5, 28, 12, 0, 0)
+    fresh = _dt.datetime(2026, 5, 28, 10, 0, 0)   # 2 h old
+    stale = _dt.datetime(2026, 5, 28, 8, 0, 0)    # 4 h old
+    assert T._should_refresh_access_token(now, fresh) is False
+    assert T._should_refresh_access_token(now, stale) is True
+    assert T._should_refresh_access_token(now, None) is False
+
+
+def test_metrics_increment_and_get(tmp_path):
+    from database import Database
+    db_file = tmp_path / "metrics.db"
+    db = Database(str(db_file))
+    db.increment_metric("captcha", day="2026-05-28")
+    db.increment_metric("captcha", day="2026-05-28")
+    db.increment_metric("http_401", day="2026-05-28")
+    assert db.get_metric("captcha", day="2026-05-28") == 2
+    assert db.get_metric("http_401", day="2026-05-28") == 1
+    assert db.get_metric("captcha", day="2026-05-27") == 0
+    db.close()

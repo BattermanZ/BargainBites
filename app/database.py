@@ -3,6 +3,9 @@ import json
 import threading
 import secrets
 import string
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Database:
     _local = threading.local()
@@ -13,6 +16,7 @@ class Database:
 
     def _connect(self):
         if not hasattr(self._local, 'conn') or self._local.conn is None:
+            logger.debug(f"Opening DB connection: {self.db_file}")
             self._local.conn = sqlite3.connect(self.db_file)
             self._local.cursor = self._local.conn.cursor()
         self.create_tables()
@@ -76,6 +80,9 @@ CREATE TABLE IF NOT EXISTS admin_users
 
     def save_available_items_favorites(self, data):
         self._connect()
+        # Replace the whole table so pruned/stale item ids are actually removed,
+        # not just left behind by an upsert.
+        self._local.cursor.execute('DELETE FROM available_items_favorites')
         for item_id, item_data in data.items():
             self._local.cursor.execute('INSERT OR REPLACE INTO available_items_favorites VALUES (?, ?)',
                                 (item_id, json.dumps(item_data)))
@@ -159,6 +166,7 @@ CREATE TABLE IF NOT EXISTS admin_users
 
     def close(self):
         if hasattr(self._local, 'conn') and self._local.conn:
+            logger.debug(f"Closing DB connection: {self.db_file}")
             self._local.conn.close()
             self._local.conn = None
             self._local.cursor = None
@@ -167,7 +175,57 @@ CREATE TABLE IF NOT EXISTS admin_users
         self._connect()
         user_id_str = str(user_id)
         self._local.cursor.execute('SELECT 1 FROM admin_users WHERE user_id = ?', (user_id_str,))
-        result = bool(self._local.cursor.fetchone())
-        print(f"Database admin check for user {user_id_str}: {result}")  # Add this line for debugging
-        return result
+        return bool(self._local.cursor.fetchone())
 
+    def _ensure_favourite_counts_table(self):
+        self._connect()
+        self._local.cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_favourite_counts
+        (user_id TEXT PRIMARY KEY,
+         last_count INTEGER,
+         cycles_since_probe INTEGER DEFAULT 0)
+        ''')
+        self._local.conn.commit()
+
+    def get_favourite_count_state(self, user_id):
+        """Return (last_count, cycles_since_probe). (None, 0) if unknown."""
+        self._ensure_favourite_counts_table()
+        self._local.cursor.execute(
+            'SELECT last_count, cycles_since_probe FROM user_favourite_counts WHERE user_id = ?',
+            (user_id,))
+        row = self._local.cursor.fetchone()
+        if row is None:
+            return (None, 0)
+        return (row[0], row[1] or 0)
+
+    def set_favourite_count_state(self, user_id, last_count, cycles_since_probe):
+        self._ensure_favourite_counts_table()
+        self._local.cursor.execute(
+            'INSERT OR REPLACE INTO user_favourite_counts VALUES (?, ?, ?)',
+            (user_id, int(last_count), int(cycles_since_probe)))
+        self._local.conn.commit()
+
+    def _ensure_poller_metrics_table(self):
+        self._connect()
+        self._local.cursor.execute('''
+        CREATE TABLE IF NOT EXISTS poller_metrics
+        (day TEXT, metric TEXT, value INTEGER DEFAULT 0,
+         PRIMARY KEY (day, metric))
+        ''')
+        self._local.conn.commit()
+
+    def increment_metric(self, metric, day):
+        self._ensure_poller_metrics_table()
+        self._local.cursor.execute(
+            'INSERT INTO poller_metrics(day, metric, value) VALUES (?, ?, 1) '
+            'ON CONFLICT(day, metric) DO UPDATE SET value = value + 1',
+            (day, metric))
+        self._local.conn.commit()
+
+    def get_metric(self, metric, day):
+        self._ensure_poller_metrics_table()
+        self._local.cursor.execute(
+            'SELECT value FROM poller_metrics WHERE day = ? AND metric = ?',
+            (day, metric))
+        row = self._local.cursor.fetchone()
+        return int(row[0]) if row else 0

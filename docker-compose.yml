@@ -1,0 +1,12 @@
+services:
+  bargainbites:
+    image: registry.batterlan.cc/bargainbites:v2.0.0
+    container_name: bargainbites
+    restart: unless-stopped
+    user: "65532:65532"
+    env_file: .env
+    environment:
+      - TZ=Europe/Amsterdam
+    volumes:
+      - ./db:/app/database
+      - ./logs:/app/logs
