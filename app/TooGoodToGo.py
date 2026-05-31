@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from datetime import datetime, timezone, date, timedelta
 from threading import Thread, Event, Lock
@@ -29,6 +30,9 @@ class TooGoodToGo:
         self.available_items_favorites = self.db.get_available_items_favorites()
         self.connected_clients = {}   # user_id -> TgtgClient (per-user cache)
         self.pending_logins = {}  # telegram_user_id (str) -> {"client", "polling_id", "email"}
+        # chat_id (str) -> what the bot is currently waiting for the user to send
+        # as a plain follow-up message: "email" | "relogin_email" | "token" | "pin"
+        self.awaiting_input = {}
         self._client_lock = Lock()
         self._user_cooldowns = {}  # user_id -> epoch seconds when cooldown expires
         self.shutdown_flag = Event()
@@ -77,6 +81,26 @@ class TooGoodToGo:
         """Thread-safe: enqueue a plain-text message for the async sender."""
         self.message_queue.put((str(telegram_user_id), message))
 
+    # --- Conversational input state -------------------------------------------------
+    # When the bot prompts a chat for a value (email, token, PIN), it records what it
+    # is waiting for here. The next plain-text message from that chat is then routed
+    # to the matching flow. Any command clears the pending prompt (cancel-on-command).
+
+    def set_awaiting(self, chat_id, kind):
+        if not hasattr(self, "awaiting_input"):
+            self.awaiting_input = {}
+        self.awaiting_input[str(chat_id)] = kind
+
+    def get_awaiting(self, chat_id):
+        return getattr(self, "awaiting_input", {}).get(str(chat_id))
+
+    def clear_awaiting(self, chat_id):
+        getattr(self, "awaiting_input", {}).pop(str(chat_id), None)
+
+    @staticmethod
+    def _is_valid_email(text):
+        return bool(re.match(r"[^@]+@[^@]+\.[^@]+", (text or "").strip()))
+
     def add_user(self, telegram_user_id, credentials):
         self.users_login_data[telegram_user_id] = credentials
         self.db.save_users_login_data(self.users_login_data)
@@ -121,11 +145,12 @@ class TooGoodToGo:
                     "polling_id": login_resp["polling_id"],
                     "email": email,
                 }
+                self.set_awaiting(telegram_user_id, "pin")
                 self.logger.info(f"Login initiated for {telegram_user_id} - waiting for PIN")
                 self.message_queue_text(
                     telegram_user_id,
                     "📩 Check your email for a *login PIN code* from Too Good To Go.\n\n"
-                    "Then send it here:\n`/pin 12345`",
+                    "Then just send the PIN here (e.g. `12345`).",
                 )
             elif state == "TERMS":
                 self.message_queue_text(
@@ -152,7 +177,8 @@ class TooGoodToGo:
         telegram_user_id = str(telegram_user_id)
         pending = self.pending_logins.pop(telegram_user_id, None)
         if not pending:
-            self.message_queue_text(telegram_user_id, "⚠️ No pending login. Start with `/login email@example.com` first.")
+            self.clear_awaiting(telegram_user_id)
+            self.message_queue_text(telegram_user_id, "⚠️ No pending login. Start with /login first.")
             return
         try:
             client = pending["client"]
@@ -163,15 +189,18 @@ class TooGoodToGo:
             # pay the cold-connect tax (rebuild + rate-limit sleep).
             with self._client_lock:
                 self.connected_clients[telegram_user_id] = client
+            self.clear_awaiting(telegram_user_id)
             self.logger.info(f"Login completed for {telegram_user_id}")
             self.message_queue_text(telegram_user_id, "✅ You are now logged in!")
         except TgtgLoginError as e:
             self.logger.exception(f"PIN auth failed for {telegram_user_id}: {e}")
             self.pending_logins[telegram_user_id] = pending  # allow retry
-            self.message_queue_text(telegram_user_id, "❌ Invalid or expired PIN. Check your email and resend `/pin 12345`.")
+            self.set_awaiting(telegram_user_id, "pin")  # let the user just resend the PIN
+            self.message_queue_text(telegram_user_id, "❌ Invalid or expired PIN. Check your email and send the PIN again.")
         except Exception as e:
             self.logger.exception(f"Error completing login for {telegram_user_id}: {e}")
-            self.message_queue_text(telegram_user_id, "❌ Login failed. Please try `/login` again.")
+            self.clear_awaiting(telegram_user_id)
+            self.message_queue_text(telegram_user_id, "❌ Login failed. Please try /login again.")
 
     async def relogin(self, telegram_user_id, email):
         telegram_user_id = str(telegram_user_id)

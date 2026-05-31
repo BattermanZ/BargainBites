@@ -49,6 +49,44 @@ def test_prune_seen_items_keeps_only_active():
     assert set(pruned.keys()) == {"a", "c"}
 
 
+def test_awaiting_input_roundtrip():
+    import TooGoodToGo
+    inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)
+    inst.awaiting_input = {}
+    assert inst.get_awaiting("u1") is None          # nothing pending
+    inst.set_awaiting("u1", "email")
+    assert inst.get_awaiting("u1") == "email"
+    assert inst.get_awaiting("u2") is None           # isolated per chat
+    inst.set_awaiting("u1", "pin")                    # overwrite
+    assert inst.get_awaiting("u1") == "pin"
+    inst.clear_awaiting("u1")
+    assert inst.get_awaiting("u1") is None
+    inst.clear_awaiting("u1")                         # idempotent, no error
+
+
+def test_awaiting_helpers_tolerate_missing_dict():
+    import TooGoodToGo
+    inst = TooGoodToGo.TooGoodToGo.__new__(TooGoodToGo.TooGoodToGo)  # no __init__
+    # Helpers must not crash before awaiting_input is initialised.
+    assert inst.get_awaiting("u1") is None
+    inst.clear_awaiting("u1")
+    inst.set_awaiting("u1", "token")
+    assert inst.get_awaiting("u1") == "token"
+
+
+@pytest.mark.parametrize("text,valid", [
+    ("a@b.co", True),
+    ("user.name+tag@example.com", True),
+    ("/info", False),
+    ("", False),
+    ("notanemail", False),
+    ("12345", False),
+])
+def test_is_valid_email(text, valid):
+    import TooGoodToGo
+    assert TooGoodToGo.TooGoodToGo._is_valid_email(text) is valid
+
+
 def test_user_cooldown_skip_and_expiry(monkeypatch):
     import TooGoodToGo
     import time

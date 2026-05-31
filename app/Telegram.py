@@ -1,5 +1,4 @@
-import re
-import configparser
+import asyncio
 from telebot import types
 from telebot.async_telebot import AsyncTeleBot
 
@@ -15,19 +14,61 @@ def setup_bot(token, tooGoodToGo, logger, admin_ids):
         logger.info(f"Authorization check for user {user_id}: {is_authorized}")
         return is_authorized
 
+    def command_arg(message):
+        """Return the text after the command, or '' if none was supplied."""
+        parts = message.text.split(maxsplit=1)
+        return parts[1].strip() if len(parts) > 1 else ""
+
+    # --- Shared submit helpers (used by both one-shot commands and the
+    #     conversational follow-up handler) -------------------------------------
+
+    async def submit_email(message, email, *, relogin=False):
+        chat_id = str(message.chat.id)
+        if not tooGoodToGo._is_valid_email(email):
+            tooGoodToGo.set_awaiting(chat_id, "relogin_email" if relogin else "email")
+            await bot.send_message(
+                chat_id,
+                "*⚠️ That doesn't look like a valid email.*\nPlease send your "
+                "Too Good To Go email address again.",
+                parse_mode="Markdown",
+            )
+            return
+        await bot.send_message(chat_id, text="⏳ Requesting login...")
+        if relogin:
+            await tooGoodToGo.relogin(chat_id, email)
+        else:
+            await tooGoodToGo.new_user(chat_id, email)
+
+    async def submit_pin(message, pin):
+        chat_id = str(message.chat.id)
+        if not pin:
+            tooGoodToGo.set_awaiting(chat_id, "pin")
+            await bot.send_message(chat_id, "⚠️ Please send the PIN from your email (e.g. `12345`).", parse_mode="Markdown")
+            return
+        await bot.send_message(chat_id, text="⏳ Verifying PIN...")
+        asyncio.get_event_loop().run_in_executor(None, tooGoodToGo.complete_login_with_pin, chat_id, pin)
+
+    async def submit_token(message, token):
+        if token and tooGoodToGo.db.validate_token(token):
+            if tooGoodToGo.authorize_user(token, str(message.from_user.id), message.from_user.first_name):
+                await bot.reply_to(message, f"You have been successfully authorized for private chat access, {message.from_user.first_name}.")
+            else:
+                await bot.reply_to(message, "Error occurred during authorization. Please try again or contact an admin.")
+        else:
+            await bot.reply_to(message, "Invalid or missing token. Please send a valid invite token to gain access.")
+
     @bot.message_handler(commands=['start'])
     async def start(message):
+        tooGoodToGo.clear_awaiting(message.chat.id)
         if await check_authorization(message):
             await send_welcome(message)
+            return
+        token = command_arg(message)
+        if token:
+            await submit_token(message, token)
         else:
-            token = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
-            if token and tooGoodToGo.db.validate_token(token):
-                if tooGoodToGo.authorize_user(token, str(message.from_user.id), message.from_user.first_name):
-                    await bot.reply_to(message, f"You have been successfully authorized for private chat access, {message.from_user.first_name}.")
-                else:
-                    await bot.reply_to(message, "Error occurred during authorization. Please try again or contact an admin.")
-            else:
-                await bot.reply_to(message, "Invalid or missing token. Please use a valid token to start the bot in private chat.")
+            tooGoodToGo.set_awaiting(message.chat.id, "token")
+            await bot.reply_to(message, "👋 Please send me your invite token to get access.")
 
     @bot.message_handler(commands=['help'])
     async def send_welcome(message):
@@ -42,9 +83,9 @@ def setup_bot(token, tooGoodToGo, logger, admin_ids):
 The bot will notify this group as soon as new bags from the favorites are available.
 
 *❗️️This is necessary if you want to use the bot❗️*
-🔑 To login, enter
-*/login email@example.com*
-_You'll receive an email with a PIN code. Then send_ */pin 12345* _to finish. No password needed._
+🔑 To login, send */login* and the bot will ask for your email.
+_You can also do it in one step:_ */login email@example.com*
+_You'll then receive a PIN by email — just send it back here to finish. No password needed._
 
 ⚙️ With */settings* you can set when the group wants to be notified. 
 
@@ -65,7 +106,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
         credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
         if credentials is None:
             await bot.send_message(chat_id=message.chat.id,
-                                   text="🔑 You have to log in with your mail first!\nPlease enter */login email@example.com*\n*❗️️This is necessary if you want to use the bot❗️*",
+                                   text="🔑 You have to log in first!\nSend */login* and I'll ask for your email.\n*❗️️This is necessary if you want to use the bot❗️*",
                                    parse_mode="Markdown")
             return None
         await tooGoodToGo.send_available_favourite_items_for_one_user(str(message.chat.id))
@@ -74,50 +115,42 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
     async def send_login(message):
         if not await check_authorization(message):
             return
+        tooGoodToGo.clear_awaiting(message.chat.id)
         logger.info(f"Received /login command in chat {message.chat.id}")
         credentials = tooGoodToGo.find_credentials_by_telegramUserID(str(message.chat.id))
         if credentials is not None:
-            await bot.send_message(chat_id=message.chat.id, text="👍 This chat is already logged in!")
+            await bot.send_message(chat_id=message.chat.id, text="👍 This chat is already logged in! To re-login, use /relogin")
             return None
-        email = message.text.replace('/login', '').lstrip()
-        logger.info(f"Login attempt with email: {email}")
-
-        if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=message.chat.id, text="⏳ Requesting login...")
-            await tooGoodToGo.new_user(str(message.chat.id), email)
+        email = command_arg(message)
+        if email:
+            await submit_email(message, email)
         else:
+            tooGoodToGo.set_awaiting(message.chat.id, "email")
             await bot.send_message(chat_id=message.chat.id,
-                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */login email@example.com*\n_You'll receive an email with a PIN code. Then send_ */pin 12345* _to finish. No password needed._",
+                                   text="🔑 Please send me your *Too Good To Go email address*.\n_You'll then get a PIN by email to finish. No password needed._",
                                    parse_mode="Markdown")
 
     @bot.message_handler(commands=['relogin'])
     async def send_relogin(message):
         if not await check_authorization(message):
             return
+        tooGoodToGo.clear_awaiting(message.chat.id)
         logger.info(f"Received /relogin command in chat {message.chat.id}")
-        email = message.text.replace('/relogin', '').lstrip()
-        logger.info(f"Relogin attempt with email: {email}")
-
-        if re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            await bot.send_message(chat_id=message.chat.id, text="⏳ Requesting login...")
-            await tooGoodToGo.relogin(str(message.chat.id), email)
+        email = command_arg(message)
+        if email:
+            await submit_email(message, email, relogin=True)
         else:
+            tooGoodToGo.set_awaiting(message.chat.id, "relogin_email")
             await bot.send_message(chat_id=message.chat.id,
-                                   text="*⚠️ No valid mail address ⚠️*\nPlease enter */relogin email@example.com*\n_You'll receive an email with a PIN code. Then send_ */pin 12345* _to finish. No password needed._",
+                                   text="🔄 Please send me the *Too Good To Go email address* to re-login with.\n_You'll then get a PIN by email to finish. No password needed._",
                                    parse_mode="Markdown")
 
     @bot.message_handler(commands=['pin'])
     async def send_pin(message):
         if not await check_authorization(message):
             return
-        chat_id = str(message.chat.id)
-        pin = message.text.replace('/pin', '').strip()
-        if not pin:
-            await bot.send_message(chat_id=message.chat.id, text="⚠️ Please provide the PIN from your email:\n`/pin 12345`", parse_mode="Markdown")
-            return
-        await bot.send_message(chat_id=message.chat.id, text="⏳ Verifying PIN...")
-        import asyncio
-        asyncio.get_event_loop().run_in_executor(None, tooGoodToGo.complete_login_with_pin, chat_id, pin)
+        tooGoodToGo.clear_awaiting(message.chat.id)
+        await submit_pin(message, command_arg(message))
 
     def inline_keyboard_markup(chat_id):
         inline_keyboard = types.InlineKeyboardMarkup(
@@ -264,7 +297,7 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
             "New invite token generated. Forward the next message to the new user — "
             "they just need to send it to the bot to gain access.",
         )
-        await bot.send_message(message.chat.id, f"/authorize {token}")
+        await bot.send_message(message.chat.id, f"/start {token}")
         logger.info(f"Admin {message.from_user.id} generated a new token")
 
     @bot.message_handler(commands=['list_tokens'])
@@ -279,6 +312,31 @@ _🌐 You can find more information about Too Good To Go_ [here](https://www.too
             response += f"Token: {token}\nStatus: {status}\n{user_info}\n\n"
         await bot.reply_to(message, response)
         logger.info(f"Admin {message.from_user.id} requested token list")
+
+    @bot.message_handler(func=lambda m: True, content_types=['text'])
+    async def handle_followup(message):
+        """Catch-all for plain (non-command) text. Routes the message to a pending
+        conversational flow if one is active for this chat; otherwise nudges the
+        user toward /help. Commands never reach here — telebot dispatches them to
+        their own handlers — so sending any command cancels a pending prompt."""
+        chat_id = str(message.chat.id)
+        kind = tooGoodToGo.get_awaiting(chat_id)
+        if not kind:
+            return
+        # Token redemption is the only flow allowed before authorization.
+        if kind != "token" and not await check_authorization(message):
+            tooGoodToGo.clear_awaiting(chat_id)
+            return
+        tooGoodToGo.clear_awaiting(chat_id)
+        text = message.text.strip()
+        if kind == "email":
+            await submit_email(message, text)
+        elif kind == "relogin_email":
+            await submit_email(message, text, relogin=True)
+        elif kind == "pin":
+            await submit_pin(message, text)
+        elif kind == "token":
+            await submit_token(message, text)
 
     async def shutdown():
         logger.info("Shutting down Telegram bot...")
