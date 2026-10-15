@@ -66,10 +66,10 @@ volumes:
   - ./logs:/app/logs                    # rotating log files
 ```
 
-> **Note:** the published image in `docker-compose.yml` points at a private
-> registry (`registry.batterlan.cc`). To run your own build, either replace the
-> `image:` line with `build: .`, or build and tag the image yourself (see
-> [Building the image](#building-the-image)).
+> **Note:** the published image lives in the private registry, so
+> `docker-compose.yml` reads the image from `APP_IMAGE`. To run your own build,
+> either replace the `image:` line with `build: .`, or build and tag the image
+> yourself and set `APP_IMAGE` to it (see [Building the image](#building-the-image)).
 
 ### 4. Run
 

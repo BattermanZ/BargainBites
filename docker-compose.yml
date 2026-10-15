@@ -1,6 +1,7 @@
 services:
   bargainbites:
-    image: registry.batterlan.cc/bargainbites:v2.0.0
+    # Set APP_IMAGE to the image you built, e.g. bargainbites:latest
+    image: ${APP_IMAGE:?set APP_IMAGE to the image to run}
     container_name: bargainbites
     restart: unless-stopped
     user: "65532:65532"
